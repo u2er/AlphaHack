@@ -1,0 +1,57 @@
+services:
+  api:
+    build: .
+    container_name: eventgraph
+    restart: unless-stopped
+    command: ["./entrypoint.sh", "api"]
+    user: "${EVENTGRAPH_UID:-1000}:${EVENTGRAPH_GID:-1000}"
+    env_file:
+      - .env
+    environment: &env
+      DATABASE_URL: postgresql+asyncpg://eventgraph:${DB_PASSWORD:-eventgraph}@db:5432/eventgraph
+      DATA_DIR: /data
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      # Картинки записей; API отдаёт их по /items/{uid}/images/{n}.
+      - data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    container_name: eventgraph-worker
+    restart: unless-stopped
+    command: ["./entrypoint.sh", "worker"]
+    user: "${EVENTGRAPH_UID:-1000}:${EVENTGRAPH_GID:-1000}"
+    env_file:
+      - .env
+    environment: *env
+    volumes:
+      # Картинки записей и кеш локального эмбеддера (data/models).
+      - data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    # Postgres с pgvector: записи, раны агентов и граф с векторами — в одной базе.
+    image: pgvector/pgvector:pg16
+    container_name: eventgraph-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: eventgraph
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-eventgraph}
+      POSTGRES_DB: eventgraph
+    volumes:
+      - pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventgraph -d eventgraph"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  data:
+  pg:
