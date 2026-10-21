@@ -33,6 +33,7 @@ class ItemOut(BaseModel):
     agent_run_id: int | None
     verdict: str | None = None
     outcome: dict[str, Any] | None = None
+    analysis: dict[str, Any] | None = None
     story_id: int | None = None
 
 
@@ -47,7 +48,7 @@ async def _get(session: AsyncSession, uid: str) -> Item:
 async def list_items(
     connector_id: int | None = None,
     processed: bool | None = None,
-    verdict: str | None = Query(default=None, description="stored | merged | skipped | duplicate | failed"),
+    verdict: str | None = Query(default=None, description="stored | merged | skipped | duplicate | below_threshold | failed"),
     before: str | None = Query(default=None, description="uid последней показанной записи"),
     limit: int = Query(default=50, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
@@ -74,7 +75,7 @@ async def list_items(
 
 
 # Статусы разбора, по которым чистится лента: pending — ещё не разобраны.
-STATES = ("pending", "processed", "stored", "merged", "skipped", "duplicate", "failed")
+STATES = ("pending", "processed", "stored", "merged", "skipped", "duplicate", "below_threshold", "failed")
 
 
 def _where(

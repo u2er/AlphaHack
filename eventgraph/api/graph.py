@@ -166,6 +166,25 @@ async def requeue_failed(
     return {"requeued": count}
 
 
+@router.post("/requeue-below-threshold")
+async def requeue_below_threshold(
+    uids: list[str] | None = None, session: AsyncSession = Depends(get_session)
+) -> dict[str, int]:
+    """Вернуть в очередь записи, закрытые порогом важности, — например, после
+    того как порог снизили. Оценка остаётся: аналитик второй раз не зовётся,
+    запись сверяется с новым порогом и, если проходит, идёт агенту новостей.
+    `uids` — только эти; без них — все такие записи."""
+    query = update(Item).where(Item.verdict == "below_threshold")
+    if uids:
+        query = query.where(Item.uid.in_(uids))
+    result = await session.execute(
+        query.values(processed_at=None, verdict=None, outcome=None, agent_run_id=None, attempts=0).returning(Item.id)
+    )
+    count = len(result.scalars().all())
+    await session.commit()
+    return {"requeued": count}
+
+
 @router.get("/maintenance", response_model=list[MaintenanceOut])
 async def list_maintenance(
     before: int | None = Query(default=None, description="id последнего показанного прогона"),
@@ -192,24 +211,28 @@ async def get_maintenance(run_id: int, session: AsyncSession = Depends(get_sessi
 
 @router.get("/processed")
 async def processed(
-    verdict: str | None = Query(default=None, description="stored | merged | skipped | duplicate | failed"),
+    verdict: str | None = Query(default=None, description="stored | merged | skipped | duplicate | below_threshold | failed"),
+    min_importance: int | None = Query(default=None, ge=0, le=5, description="важность для компании от"),
     limit: int = Query(default=50, ge=1, le=500),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    """Последние разобранные записи: вердикт, событие или причина и ран агента."""
+    """Последние разобранные записи: вердикт, событие или причина, ран агента
+    и оценка аналитика для компании."""
     query = (
         select(Item.uid, Connector.name, Item.verdict, Item.outcome, Item.processed_at, Item.agent_run_id,
-               Item.attempts, Item.data["title"].astext)
+               Item.attempts, Item.data["title"].astext, Item.analysis)
         .join(Connector, Connector.id == Item.connector_id)
         .where(Item.processed_at.is_not(None))
     )
     if verdict:
         query = query.where(Item.verdict == verdict)
+    if min_importance is not None:
+        query = query.where(Item.analysis["importance"].as_integer() >= min_importance)
     rows = (await session.execute(query.order_by(Item.processed_at.desc()).limit(limit))).all()
     return [
         {"uid": uid, "connector": name, "title": title, "verdict": v, **(outcome or {}), "processed_at": at,
-         "run_id": run_id, "attempts": attempts}
-        for uid, name, v, outcome, at, run_id, attempts, title in rows
+         "run_id": run_id, "attempts": attempts, "analysis": analysis}
+        for uid, name, v, outcome, at, run_id, attempts, title, analysis in rows
     ]
 
 
@@ -228,7 +251,7 @@ async def stats(days: int = Query(default=14, ge=1, le=90), session: AsyncSessio
     ).all()
     out: dict[str, dict[str, int]] = {}
     for date, verdict, count, distinct_events in rows:
-        entry = out.setdefault(str(date), {"events": 0, "stored": 0, "merged": 0, "skipped": 0, "duplicate": 0, "failed": 0})
+        entry = out.setdefault(str(date), {"events": 0, "stored": 0, "merged": 0, "skipped": 0, "duplicate": 0, "below_threshold": 0, "failed": 0})
         if verdict in entry:
             entry[verdict] += count
         if verdict == "stored":

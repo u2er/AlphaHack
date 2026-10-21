@@ -13,7 +13,7 @@
                                       │ сюжеты (эмбеддер)
                                       ▼
                    ┌────────── воркер ──────────────────────┐
-                   │  запись ─▶ агент news ─┐                │
+                   │  запись ─▶ analyst ─▶ news ─┐           │
                    │  задачи ─▶ gardener ───┘ инструменты ─▶ граф (Postgres + pgvector)
                    └─────────────────────────────────────────┘
                               ▲
@@ -133,6 +133,23 @@ curl -s -H "$H" localhost:8000/graph/processed | jq '.[0]'                      
 |---|---|---|---|
 | `news` | разбирает каждую новую запись отдельным раном: пишет события, людей, организации, издания; вердикт по записи | чтение, запись | 100 |
 | `gardener` | раз в `maintenance_every_days` дней, между записями: дубли, островки, обрезка | чтение, запись, удаление, обслуживание | 60 |
+| `analyst` | перед `news`, на каждую запись: насколько она важна для компании и как может повлиять на её бизнес, с оглядкой на прошлые события графа | чтение | 30 |
+
+Профиль компании — переменная `COMPANY_PROFILE`, она подставляется в
+`prompts/analyst.md` вместо `{{company_profile}}`. Пока она пуста, в промпте
+стоит заготовка. Оценка лежит в `items.analysis`: обязательны `importance`
+(0–5, для компании, а не для мира) и `impact`, остальные поля — `relevance`,
+`direction`, `horizon`, `trend`, `areas`, `entities`, `related_events`,
+`actions`, `confidence`, `headline` — описаны в конце промпта. Сбой
+аналитика разбор не останавливает: запись уходит в `news` без оценки
+(`analysis.error`), а повторная попытка разбора оценивает её снова.
+
+Порог важности — `min_importance` в `PUT /graph/settings` (по умолчанию из
+`ANALYST_MIN_IMPORTANCE`, 0 — без порога). Запись с оценкой ниже порога
+закрывается вердиктом `below_threshold`: агент `news` её не видит, в граф она
+не попадает, оценка остаётся в `items.analysis`. Запись без оценки порог не
+задерживает. Снизили порог — `POST /graph/requeue-below-threshold` вернёт такие
+записи в очередь, и они сверятся с новым порогом без повторной оценки.
 
 Каждый ран пишется в `agent_runs`, каждый шаг — в `agent_logs`: рассуждения,
 вызовы с аргументами и ответами, ошибки (`GET /agent-runs/{id}`). Запустить
@@ -148,8 +165,8 @@ curl -s -H "$H" localhost:8000/graph/processed | jq '.[0]'                      
 | `GET` | `/connectors/{name}/runs` · `/connector-runs/{id}` | запуски |
 | `GET` `DELETE` | `/items[/{uid}]` · `/items/count` · `/items/{uid}/images/{n}` | лента |
 | `GET` `PUT` | `/graph/status` · `/graph/settings` · `/graph/stats` | разбор: очередь, запись в работе, пауза; настройки (`enabled: false` — пауза); динамика по дням |
-| `GET` | `/graph/processed` | последние разобранные записи: вердикт, событие или причина, ран |
-| `POST` | `/graph/resume` · `/graph/requeue-failed` | снять паузу после сбоя; вернуть failed в очередь |
+| `GET` | `/graph/processed` | последние разобранные записи: вердикт, событие или причина, ран, оценка для компании (`?min_importance=4`) |
+| `POST` | `/graph/resume` · `/graph/requeue-failed` · `/graph/requeue-below-threshold` | снять паузу после сбоя; вернуть в очередь failed / закрытые порогом важности |
 | `POST` | `/graph/maintain` · `/graph/maintain/stop` | обслуживание сейчас / остановить после задачи |
 | `GET` | `/graph/maintenance[/{id}]` | прогоны обслуживания и их задачи |
 | `GET` | `/graphs` · `/graphs/{graph}` · `/graphs/{graph}/nodes?name=` · `/graphs/{graph}/{nodes\|edges}/{id}` | граф: выгрузка, узел, элемент |

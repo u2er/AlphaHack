@@ -8,7 +8,21 @@ from typing import Any
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-AGENTS = ("news", "gardener")
+AGENTS = ("news", "gardener", "analyst")
+
+# Пока профиль не задан, аналитик видит в промпте эту заготовку.
+COMPANY_PROFILE_PLACEHOLDER = """\
+[ПРОФИЛЬ КОМПАНИИ НЕ ЗАДАН — задайте COMPANY_PROFILE]
+Название: …
+Отрасль и рынки: …
+Продукты и услуги: …
+Клиенты: …
+География: …
+Конкуренты: …
+Партнёры и поставщики: …
+Регуляторы: …
+Ключевые риски: …
+Стратегические цели: …"""
 
 
 class Settings(BaseSettings):
@@ -45,7 +59,7 @@ class Settings(BaseSettings):
     # Потолок одного вызова модели и число повторов на 429 / 5xx / сетевых сбоях.
     llm_timeout: int = 300
     llm_retries: int = 3
-    # Каких агентов запускать: news, gardener.
+    # Каких агентов запускать: news, gardener, analyst.
     agents: str = ",".join(AGENTS)
     # Потолок одного вызова инструмента. Запись в граф идёт в этом же
     # процессе, без очереди, — ей нужно время на эмбеддинги.
@@ -74,6 +88,16 @@ class Settings(BaseSettings):
     news_image_edge: int = 512
     news_max_attempts: int = 3
 
+    # ── Аналитик ─────────────────────────────────────────────────────────────
+    # Перед разбором каждой записи аналитик оценивает её для компании:
+    # важность и как она может повлиять на бизнес (analyst.py). Профиль
+    # подставляется в его промпт вместо {{company_profile}}.
+    company_profile: str = COMPANY_PROFILE_PLACEHOLDER
+    # Порог важности для компании по умолчанию (PUT /graph/settings —
+    # min_importance): запись с оценкой ниже не идёт агенту новостей и в граф.
+    # 0 — без порога.
+    analyst_min_importance: int = 0
+
     # ── Сюжеты ───────────────────────────────────────────────────────────────
     # Записи об одном событии из разных источников — один сюжет: агент видит,
     # в какие события графа уже разобраны другие его записи. Вектор — от того
@@ -97,6 +121,11 @@ class Settings(BaseSettings):
             if not isinstance(data, dict):
                 raise ValueError("LLM_PARAMS — JSON-объект")
         return value
+
+    @field_validator("company_profile")
+    @classmethod
+    def _profile_or_placeholder(cls, value: str) -> str:
+        return value.strip() or COMPANY_PROFILE_PLACEHOLDER
 
     @property
     def llm_extra(self) -> dict[str, Any]:

@@ -80,8 +80,10 @@ class Item(Base):
 
     Агент новостей разбирает каждую запись отдельным раном, как только она
     собрана (news.py): `agent_run_id` — его ран, `verdict` — что он решил
-    (stored | merged | skipped | failed), `outcome` — событие графа или
-    причина отказа. Фильтров до агента
+    (stored | merged | skipped | failed; below_threshold — аналитик оценил
+    запись ниже порога важности, и агент её не разбирал), `outcome` — событие графа или
+    причина отказа, `analysis` — оценка аналитика для компании, сделанная до
+    разбора. Фильтров до агента
     нет: в разбор идёт всё собранное. Запись получает сюжет (stories.py), и
     почти дословный повтор уже разобранного закрывается как duplicate.
     """
@@ -116,6 +118,9 @@ class Item(Base):
     # Сюжет — id первой записи сюжета; записи одного сюжета идут агенту вместе.
     story_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     outcome: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Оценка аналитика для компании (analyst.py): importance 0–5, impact и
+    # прочие поля схемы из prompts/analyst.md; при сбое — error. Ран — run_id.
+    analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 # ── обслуживание графа ──────────────────────────────────────────────────────

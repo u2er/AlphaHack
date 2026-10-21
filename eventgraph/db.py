@@ -13,6 +13,12 @@ class Base(DeclarativeBase):
     pass
 
 
+# create_all не добавляет колонки в уже созданные таблицы — их добавляют здесь.
+COLUMNS = (
+    "ALTER TABLE items ADD COLUMN IF NOT EXISTS analysis JSONB",
+)
+
+
 # Движок не подключается до первого запроса — импорт модуля базы не требует.
 engine = create_async_engine(settings.database_url, pool_pre_ping=True, pool_size=10, max_overflow=10)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
@@ -37,6 +43,8 @@ async def create_schema(attempts: int = 5) -> None:
             async with engine.begin() as conn:
                 await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
                 await conn.run_sync(Base.metadata.create_all)
+                for statement in COLUMNS:
+                    await conn.exec_driver_sql(statement)
             return
         except Exception:  # noqa: BLE001
             if attempt == attempts:

@@ -82,12 +82,12 @@ def test_summary_drops_the_verdict_block():
 
 @pytest.fixture
 def world(monkeypatch):
-    state = {"messages": [], "attachments": [], "replies": [], "stored": {}, "events": []}
+    state = {"messages": [], "attachments": [], "replies": [], "stored": {}, "events": [], "agents": []}
     record = item("01A", "Мэр ушёл", title="Мэр ушёл", url="https://x/1")
     state["item"] = record
 
     async def create(agent, message, history=None, attachments=None):
-        assert agent == "news"
+        state["agents"].append(agent)
         state["messages"].append(message)
         state["attachments"].append(attachments or {})
         return 40 + len(state["messages"])
@@ -108,7 +108,8 @@ def world(monkeypatch):
             return record
 
         async def commit(self):
-            state["stored"] = {"verdict": record.verdict, "attempts": record.attempts, "run": record.agent_run_id}
+            state["stored"] = {"verdict": record.verdict, "attempts": record.attempts, "run": record.agent_run_id,
+                               "analysis": record.analysis}
 
     async def story_events(it):
         return state["events"]
@@ -118,6 +119,8 @@ def world(monkeypatch):
     monkeypatch.setattr(news, "SessionLocal", Session)
     monkeypatch.setattr(news, "story_events", story_events)
     monkeypatch.setattr(settings, "news_max_attempts", 3)
+    monkeypatch.setattr(settings, "llm_api_key", "k")
+    monkeypatch.setattr(settings, "agents", "news")
     return state
 
 
@@ -133,7 +136,8 @@ async def test_a_record_is_one_run_with_its_verdict(world):
 
     assert result["verdict"] == "stored" and result["ok"] is True and result["run_id"] == 41
     assert (result["steps"], result["tool_calls"], result["tokens"]) == (7, 12, 1200)
-    assert world["stored"] == {"verdict": "stored", "attempts": 0, "run": 41}
+    assert world["stored"] == {"verdict": "stored", "attempts": 0, "run": 41, "analysis": None}
+    assert world["agents"] == ["news"]
     assert world["messages"][0].count("### ") == 1 and "Сюжет: в графе по нему уже есть" in world["messages"][0]
 
 
@@ -176,3 +180,83 @@ async def test_an_empty_queue_means_nothing_to_do(monkeypatch):
 
     monkeypatch.setattr(news, "next_item", nothing)
     assert await news.process_next(GraphSettings()) is None
+
+
+# ── аналитик перед разбором ─────────────────────────────────────────────────
+
+
+def assessed(uid="01A", importance=4):
+    return {"status": "done", "output": f'Риск.\n```json\n{{"analysis": {{"uid": "{uid}", "importance": {importance}, '
+                                        '"impact": "Ставка дорожает — спрос на кредиты падает.", "direction": "risk"}}\n```'}
+
+
+async def test_the_analyst_assesses_the_record_before_the_news_agent(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["replies"] += [assessed(), done()]
+    world["events"] = ["2026-10-07 · Событие"]
+
+    result = await news.process(world["item"], "ria", GraphSettings())
+
+    assert world["agents"] == ["analyst", "news"] and result["importance"] == 4
+    analysis_message, news_message = world["messages"]
+    assert "Оцени запись для компании." in analysis_message and "Верни вердикт" not in analysis_message
+    assert "Сюжет: в графе по нему уже есть" in analysis_message and analysis_message.endswith("Мэр ушёл")
+    stored = world["stored"]["analysis"]
+    assert (stored["importance"], stored["direction"], stored["run_id"]) == (4, "risk", 41)
+    assert world["stored"]["verdict"] == "stored"
+
+
+async def test_a_retry_keeps_the_assessment_and_does_not_ask_again(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["replies"] += [assessed(), {"status": "done", "output": "Не понял."}]
+    await news.process(world["item"], "ria", GraphSettings())
+    assert world["stored"]["attempts"] == 1 and world["stored"]["analysis"]["importance"] == 4
+
+    world["replies"].append(done())
+    await news.process(world["item"], "ria", GraphSettings())
+    assert world["agents"] == ["analyst", "news", "news"]
+    assert world["stored"]["analysis"]["importance"] == 4
+
+
+async def test_a_failed_assessment_does_not_stop_the_record(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["replies"] += [{"status": "error", "error": "Provider returned 503"}, done()]
+
+    result = await news.process(world["item"], "ria", GraphSettings())
+
+    assert result["verdict"] == "stored" and result["importance"] is None
+    assert world["stored"]["analysis"] == {"error": "Provider returned 503", "run_id": 41}
+
+
+async def test_a_record_below_the_threshold_never_reaches_the_news_agent(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["replies"].append(assessed(importance=1))
+
+    result = await news.process(world["item"], "ria", GraphSettings(min_importance=3))
+
+    assert world["agents"] == ["analyst"]
+    assert (result["verdict"], result["result"], result["ok"], result["importance"], result["run_id"]) == (
+        "below_threshold", "done", True, 1, 41)
+    record = world["item"]
+    assert record.processed_at is not None and record.outcome == {"reason": "важность для компании 1 ниже порога 3"}
+    assert record.analysis["importance"] == 1 and record.agent_run_id == 41
+
+
+async def test_the_threshold_lets_important_and_unassessed_records_through(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["replies"] += [assessed(importance=3), done()]
+    assert (await news.process(world["item"], "ria", GraphSettings(min_importance=3)))["verdict"] == "stored"
+
+    # Аналитик сорвался — запись без оценки идёт в разбор, а не теряется.
+    world["item"].analysis = None
+    world["replies"] += [{"status": "error", "error": "503"}, done()]
+    assert (await news.process(world["item"], "ria", GraphSettings(min_importance=5)))["verdict"] == "stored"
+    assert world["agents"] == ["analyst", "news", "analyst", "news"]
+
+
+async def test_a_requeued_record_is_checked_against_the_new_threshold_without_a_new_assessment(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["item"].analysis = {"importance": 2, "impact": "Фон.", "run_id": 9}
+    world["replies"].append(done())
+    assert (await news.process(world["item"], "ria", GraphSettings(min_importance=2)))["verdict"] == "stored"
+    assert world["agents"] == ["news"]

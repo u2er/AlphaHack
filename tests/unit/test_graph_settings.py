@@ -20,6 +20,7 @@ NOW = datetime(2026, 10, 8, 10, 0, tzinfo=timezone.utc)
         ({"maintenance_tasks": ["weeding"]}, "Задачи обслуживания"),
         ({"merge_pairs": 100}, "Пар и островков"),
         ({"prune_max_importance": 6}, "Важность"),
+        ({"min_importance": 6}, "Порог важности"),
     ],
 )
 def test_settings_validation(overrides, fragment):
