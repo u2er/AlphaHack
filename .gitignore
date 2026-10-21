@@ -6,3 +6,5 @@ venv/
 .pytest_cache/
 .DS_Store
 data/
+docs/
+reasoning/*.log
