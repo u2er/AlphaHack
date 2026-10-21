@@ -39,7 +39,7 @@ def test_names():
 def test_sources_are_checked():
     assert set(BY_NAME) == {s.name for s in SOURCES}
     assert all(inspect.iscoroutinefunction(s.collect) for s in SOURCES)
-    assert {s.kind for s in SOURCES} <= {"telegram_channel", "website"}
+    assert {s.kind for s in SOURCES} <= {"telegram_channel", "website", "pdf"}
 
     async def collect(ctx):
         return []

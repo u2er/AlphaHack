@@ -10,6 +10,8 @@ services:
     environment: &env
       DATABASE_URL: postgresql+asyncpg://eventgraph:${DB_PASSWORD:-eventgraph}@db:5432/eventgraph
       DATA_DIR: /data
+      # Модели docling (~1 ГБ) качаются один раз и живут в томе данных.
+      HF_HOME: /data/hf
     ports:
       - "${PORT:-8000}:8000"
     volumes:
@@ -29,8 +31,10 @@ services:
       - .env
     environment: *env
     volumes:
-      # Картинки записей и кеш локального эмбеддера (data/models).
+      # Картинки записей, кеш локального эмбеддера (data/models),
+      # модели docling (data/hf) и кэш PDF-парсера (data/pdf_cache).
       - data:/data
+      - ./pdfs:/data/pdfs
     depends_on:
       db:
         condition: service_healthy

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from eventgraph.connectors.kinds import telegram_channel, website
+from eventgraph.connectors.kinds import pdf, telegram_channel, website
 from eventgraph.connectors.runtime import Context, validate_name
 
 Collect = Callable[[Context], Awaitable[Any]]
@@ -28,6 +28,9 @@ class Source:
     # Брать ли картинки записей. У источников, где картинка — тот же текст
     # (карточка с заголовком), она только забивает контекст агента.
     images: bool = True
+    # Потолок на один запуск, сек; None — CONNECTOR_TIMEOUT. Длинный первый
+    # парсинг PDF (модели docling) не влезает в общий лимит.
+    timeout: int | None = None
 
     @property
     def kind(self) -> str:
@@ -48,6 +51,23 @@ SOURCES: tuple[Source, ...] = (
         collect=website.collect,
         config={"url": "https://news.tsu.ru/news/", "backfill": 10, "max_new_per_run": 30},
         description="Новости на сайте ТГУ",
+    ),
+    # PDF кладут в ./pdfs на хосте (в контейнере это /data/pdfs); файл — одна
+    # запись: весь текст документа, картинки и таблицы. Первый запуск с движком
+    # docling скачивает модели (~1 ГБ) в HF_HOME, поэтому потолок выше общего.
+    Source(
+        name="pdf_docs",
+        collect=pdf.collect,
+        config={
+            "mode": "dir",
+            "path": "/data/pdfs",
+            "source": "Документы",
+            "max_files_per_run": 3,
+        },
+        description="PDF-документы из каталога /data/pdfs",
+        interval_seconds=3600,
+        images=True,
+        timeout=3600,
     ),
 )
 

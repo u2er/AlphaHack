@@ -1,7 +1,7 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
-pydantic-settings==2.7.0
+pydantic-settings>=2.14,<3  # docling-core требует >=2.14; API для config.py стабильна
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 # Векторы графа в Postgres.
@@ -23,6 +23,17 @@ trafilatura==2.3.1
 # Локальный эмбеддер (ONNX на CPU), когда EMB_BASE_URL не задан; векторы — numpy.
 fastembed==0.9.0
 numpy==2.5.4
+# PDF-источник (connectors/kinds/pdf + пакет docling_parser в корне репо).
+# Версии экосистемы docling (вместе с torch) движутся быстро, поэтому точных
+# пинов нет: torch в образе ставится отдельно CPU-сборкой до этого файла
+# (см. Dockerfile), иначе pip скачает многотерабайтную CUDA-версию.
+# pandas/tabulate приходят вместе с docling; системный tesseract-ocr — в Dockerfile.
+docling>=2.110,<3
+# tesserocr — Python-обвязка Tesseract (OCR docling, языки rus/eng);
+# в standard-бандле docling её нет, отсюда явная строка.
+tesserocr>=2.8
+# layout-модель docling (AutoImageProcessor) несовместима с transformers 5.x.
+transformers>=4.46,<5
 
 # тесты
 pytest==8.3.4
