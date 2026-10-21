@@ -26,6 +26,11 @@ class GraphSettings:
     # Часовой пояс дней в /graph/stats.
     timezone: str = "Asia/Tomsk"
     item_images: int = field(default_factory=lambda: settings.news_item_images)
+    # Порог важности для компании (analyst.py): запись с оценкой ниже
+    # закрывается как below_threshold — без агента новостей и без графа.
+    # 0 — порога нет; запись без оценки (аналитик выключен или сорвался)
+    # разбирается как обычно.
+    min_importance: int = field(default_factory=lambda: settings.analyst_min_importance)
     # Обслуживание графа садовником (gardening.py): не чаще раза в
     # `maintenance_every_days` дней, между записями.
     maintenance_enabled: bool = True
@@ -58,6 +63,8 @@ class GraphSettings:
             return f"Неизвестный часовой пояс: {self.timezone}"
         if not 0 <= int(self.item_images) <= 10:
             return "Картинок на запись — от 0 до 10"
+        if not 0 <= int(self.min_importance) <= 5:
+            return "Порог важности для компании — от 0 до 5"
         if not 1 <= int(self.maintenance_every_days) <= 90:
             return "Обслуживание — раз в 1…90 дней"
         bad = [t for t in self.maintenance_tasks if t not in MAINTENANCE_TASKS]

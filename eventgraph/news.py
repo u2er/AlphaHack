@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 
-from eventgraph import stories
+from eventgraph import analyst, stories
 from eventgraph.agents import runner
 from eventgraph.config import settings
 from eventgraph.db import SessionLocal
@@ -41,12 +41,14 @@ def _field(data: dict[str, Any], *keys: str) -> str:
 
 
 def render(item: Item, connector: str, now: datetime, item_chars: int,
-           pictures: list[str] | None = None, events: list[str] | None = None) -> str:
+           pictures: list[str] | None = None, events: list[str] | None = None,
+           task: str = "Верни вердикт по записи.") -> str:
     """Сообщение агенту: дата и запись в формате, который описан в его промпте.
 
     `pictures` — имена картинок записи во вложениях рана; `events` — события
-    графа, в которые уже разобраны другие записи её сюжета."""
-    parts = [f"Сегодня: {now:%Y-%m-%d %H:%M} UTC.", "Верни вердикт по записи."]
+    графа, в которые уже разобраны другие записи её сюжета; `task` — что
+    сделать с записью (аналитику — оценить, а не разобрать)."""
+    parts = [f"Сегодня: {now:%Y-%m-%d %H:%M} UTC.", task]
     if pictures:
         # Каждый шаг заново отправляет модели весь разговор: картинки по одной
         # за шаг однажды превратили 8 шагов в 30 и утроили токены.
@@ -210,10 +212,20 @@ async def story_events(item: Item) -> list[str]:
 async def process(item: Item, connector: str, cfg: "GraphSettings") -> dict[str, Any]:
     """Одна запись — один ран агента. Итог: вердикт (или retry / failed),
     ошибка и `ok` — дошёл ли ран до ответа. Ран без ответа (модель недоступна,
-    ран упал) — повод для паузы: следующая запись, скорее всего, упадёт так же."""
+    ран упал) — повод для паузы: следующая запись, скорее всего, упадёт так же.
+
+    До агента новостей запись оценивает аналитик (analyst.py): в графе ещё
+    нет этой записи, только прошлые новости."""
     files = image_files(item, cfg.item_images) if cfg.item_images > 0 and settings.llm_vision else []
-    message = render(item, connector, _now(), settings.news_item_chars, [name for name, _ in files],
-                     await story_events(item))
+    pictures, events = [name for name, _ in files], await story_events(item)
+    analysis, assessed = None, None
+    if analyst.needed(item):
+        analysis, assessed = await analyst.assess(
+            render(item, connector, _now(), settings.news_item_chars, pictures, events, task=analyst.TASK),
+            item.uid, dict(files))
+    if reason := analyst.below(analysis or item.analysis, cfg.min_importance):
+        return await _below_threshold(item, connector, analysis, reason, assessed)
+    message = render(item, connector, _now(), settings.news_item_chars, pictures, events)
     run_id = await runner.create("news", message, attachments=dict(files))
     row = await runner.execute(run_id)
     output, error = run_result(row)
@@ -222,13 +234,34 @@ async def process(item: Item, connector: str, cfg: "GraphSettings") -> dict[str,
         error = "агент не вернул вердикт по записи"
     async with SessionLocal() as session:
         stored = await session.get(Item, item.id)
+        if analysis is not None:
+            stored.analysis = analysis
         result = settle(stored, found, run_id, _now(), error)
         verdict = stored.verdict
         await session.commit()
     logger.info("запись %s (%s): %s, ран %s%s", item.uid, connector, verdict or result, run_id,
                 f" — {error}" if error else "")
     return {"uid": item.uid, "run_id": run_id, "result": result, "verdict": verdict, "error": error,
-            "ok": bool(output), **run_stats(row)}
+            "ok": bool(output), "importance": (analysis or item.analysis or {}).get("importance"),
+            **run_stats(row)}
+
+
+async def _below_threshold(item: Item, connector: str, analysis: dict[str, Any] | None, reason: str,
+                           row: Any) -> dict[str, Any]:
+    """Запись ниже порога важности: закрыта без агента новостей и графа."""
+    async with SessionLocal() as session:
+        stored = await session.get(Item, item.id)
+        if analysis is not None:
+            stored.analysis = analysis
+        stored.processed_at = _now()
+        stored.verdict = analyst.BELOW
+        stored.outcome = {"reason": reason}
+        stored.agent_run_id = (stored.analysis or {}).get("run_id")
+        await session.commit()
+    logger.info("запись %s (%s): %s — %s", item.uid, connector, analyst.BELOW, reason)
+    stats = run_stats(row) if row is not None else {"steps": 0, "tool_calls": 0, "tokens": 0, "duration_ms": 0}
+    return {"uid": item.uid, "run_id": stored.agent_run_id, "result": "done", "verdict": analyst.BELOW, "error": "",
+            "ok": True, "importance": stored.analysis["importance"], **stats}
 
 
 async def process_next(cfg: "GraphSettings") -> dict[str, Any] | None:

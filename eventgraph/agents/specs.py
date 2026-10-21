@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from eventgraph.config import settings
+
 PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
 
@@ -26,7 +28,8 @@ class AgentSpec:
 
     @property
     def prompt(self) -> str:
-        return load_prompt(self.prompt_file)
+        # Профиль компании — из настроек, чтобы его правка не трогала промпт.
+        return load_prompt(self.prompt_file).replace("{{company_profile}}", settings.company_profile.strip())
 
 
 SPECS: dict[str, AgentSpec] = {
@@ -35,6 +38,8 @@ SPECS: dict[str, AgentSpec] = {
     # Обслуживает граф: дубли, островки, обрезка.
     "gardener": AgentSpec("gardener", "gardener.md", max_steps=60, temperature=0.2,
                           write=True, delete=True, maintenance=True),
+    # Перед разбором оценивает запись для компании; граф только читает.
+    "analyst": AgentSpec("analyst", "analyst.md", max_steps=30, temperature=0.2),
 }
 
 
