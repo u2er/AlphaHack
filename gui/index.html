@@ -3,26 +3,120 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Альфа · Профиль компании</title>
+  <title>Альфа-Бизнес · Бизнес-аналитика</title>
   <link rel="stylesheet" href="/style.css">
   <script defer src="/app.js"></script>
+  <script defer src="/bank.js"></script>
 </head>
 <body>
-  <header class="topbar"><div class="brand"><span class="mark">А</span><span>Альфа <b>Профиль</b></span></div><div class="buttonrow"><span class="badge">Локальный тестовый стенд</span><button id="restartButton" class="secondary" hidden>Начать сначала</button></div></header>
-  <main>
-    <div class="hero"><div><p class="eyebrow">ОБРАЗ КОМПАНИИ</p><h1>Соберите контекст для будущей новостной аналитики</h1><p>Пройдите путь от данных компании до тем наблюдения. Каждый вывод можно сверить с исходным полем и журналом работы.</p></div><div class="hero-count">01<span> / 05</span></div></div>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <a class="logo" href="#/home"><span class="mark">А</span><span>Альфа‑Бизнес</span></a>
+    <nav class="menu" aria-label="Разделы">
+      <a href="#/home" data-route="home"><span class="ico">⌂</span>Главная</a>
+      <a href="#/insights" data-route="insights" class="menu-accent"><span class="ico">✦</span>Бизнес‑аналитика<span class="new">Новое</span></a>
+      <a href="#/demo/accounts" data-route="demo"><span class="ico">₽</span>Счета</a>
+      <a href="#/demo/payments" data-route="demo"><span class="ico">⇄</span>Платежи</a>
+      <a href="#/demo/salary" data-route="demo"><span class="ico">☺</span>Зарплатный проект</a>
+      <a href="#/demo/credit" data-route="demo"><span class="ico">%</span>Кредиты</a>
+      <a href="#/profile" data-route="profile"><span class="ico">◎</span>Профиль компании</a>
+    </nav>
+    <p class="sidebar-note">Прототип для хакатона. Счета и платежи — демонстрационные заглушки; аналитика работает на реальных данных стенда.</p>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="burger" id="burger" aria-label="Меню">☰</button>
+      <label class="client">
+        <span class="client-label">Компания</span>
+        <select id="clientSelect" aria-label="Компания"><option value="">Загрузка…</option></select>
+      </label>
+      <div class="topbar-right">
+        <span class="badge">Тестовый стенд</span>
+        <span class="avatar" title="Пользователь">ФД</span>
+      </div>
+    </header>
+
     <div id="notice" class="notice" role="status" hidden></div>
-    <div id="start" class="panel"><h2>1. Выбор компании</h2><p class="muted">Данные обезличены. Найдите компанию по ID, отрасли или региону.</p><div class="searchline"><input id="companySearch" placeholder="Например, U_200890 или металлы" autocomplete="off"><button id="searchButton">Найти</button></div><div id="searchResults" class="results"></div><div class="divider">или</div><div class="searchline"><input id="manualName" placeholder="Название компании (необязательно)"><button id="manualButton" class="secondary">Создать вручную</button></div></div>
-    <div id="workspace" hidden>
-      <nav class="steps" aria-label="Этапы"><a href="#draft">Черновик</a><a href="#fields">Исходные данные</a><a href="#questions">Уточнения</a><a href="#assessment">Темы</a><a href="#sources">Источники и итог</a></nav>
-      <section id="draft" class="panel"><div class="section-head"><div><span class="stepnum">02</span><h2>Понятный черновик</h2></div><button id="overviewButton" hidden>Обновить черновик</button></div><p class="muted">Модель кратко описывает данные и отмечает пробелы. Для каждого вывода показаны исходные поля.</p><div id="overview"></div></section>
-      <section id="fields" class="panel"><div class="section-head"><div><span class="stepnum">02</span><h2>Поля и сигналы</h2></div><span class="pill">Исходные значения сохраняются</span></div><p class="muted">Раскройте список, чтобы посмотреть или исправить поля. Пустые поля можно оставить незаполненными.</p><details id="fieldsDetails"><summary>Показать поля и сигналы</summary><div id="facts"></div><details><summary>Показать исходные поля CSV</summary><div id="rawFacts" class="raw-grid"></div></details><details><summary>Показать наблюдаемые связи и платежи</summary><div id="signals"></div></details></details><button id="manualReadyButton" hidden>Готово, сформировать черновик</button></section>
-      <section id="edit" class="panel"><h2>Исправить профиль словами</h2><p class="muted">Напишите правку обычными словами или укажите точный ключ поля. Модель предложит изменение для подтверждения.</p><div class="searchline"><input id="naturalEdit" placeholder="Например: город регистрации теперь Томск"><button id="proposeButton" class="secondary">Предложить правку</button></div><div id="proposal"></div></section>
-      <section id="questions" class="panel"><div class="section-head"><div><span class="stepnum">03</span><h2>Уточнения от пользователя</h2></div><button id="confirmProfileButton">Подтвердить профиль</button></div><p class="muted">Заполните то, что знаете. Любой вопрос можно пропустить и оставить пустым.</p><div id="questionsList"></div><div id="issues"></div></section>
-      <section id="assessment" class="panel"><div class="section-head"><div><span class="stepnum">04</span><h2>Предварительные темы</h2></div><button id="retryAgentButton" class="secondary" hidden>Повторить подбор тем</button></div><p class="muted">После подтверждения профиля агент автоматически обратится к локальной библиотеке аналитики банка. При необходимости он задаст до двух вопросов.</p><div id="agentStatus"></div><div id="agentQuestion"></div><div id="assessmentBody"></div><div id="assessmentActions"></div></section>
-      <section id="sources" class="panel"><div class="section-head"><div><span class="stepnum">05</span><h2>Источники и результат</h2></div><button id="exportButton">Показать итоговый JSON</button></div><p class="muted">Сайты сохраняются как настройки для будущего поиска. Сейчас запросы к ним не выполняются.</p><label class="fieldlabel" for="sitesInput">Сайты через запятую</label><input id="sitesInput" placeholder="example.com, https://news.example.org"><div class="searchline compact"><select id="sitesMode"><option value="include">Искать также на этих сайтах</option><option value="only">Искать только на этих сайтах</option></select><button id="saveSitesButton" class="secondary">Сохранить сайты</button></div><div id="exportResult"></div></section>
-      <section id="audit" class="panel"><div class="section-head"><div><span class="stepnum">ЛОГ</span><h2>Ход работы</h2></div><button id="refreshTraceButton" class="secondary">Обновить журнал</button></div><p id="tracePath" class="muted"></p><div id="traceEvents" class="trace-list"></div></section>
-    </div>
-  </main>
+
+    <!-- Главная -->
+    <section class="view" id="view-home" hidden>
+      <div class="page-head">
+        <div><p class="eyebrow" id="homeGreeting">Добрый день</p><h1 id="homeTitle">Главная</h1></div>
+      </div>
+      <div class="accounts">
+        <div class="account"><span class="demo">демо</span><small>Расчётный счёт ··· 4021</small><b>12 480 312,40 ₽</b><span class="muted">Доступно сегодня</span></div>
+        <div class="account"><span class="demo">демо</span><small>Валютный счёт ··· 7735</small><b>184 220,00 $</b><span class="muted">Экспортная выручка</span></div>
+        <div class="account"><span class="demo">демо</span><small>Кредитная линия</small><b>45 000 000 ₽</b><span class="muted">Ставка: КС + 3,1%</span></div>
+      </div>
+      <a class="entry" href="#/insights" id="entryBanner">
+        <div class="entry-text">
+          <span class="entry-kicker">✦ Бизнес‑аналитика</span>
+          <h2 id="entryTitle">Что важно для вашего бизнеса сегодня</h2>
+          <p id="entrySub">Новости рынка, отобранные под вашу компанию, с интерпретацией и аналитикой Альфа‑Банка.</p>
+          <span class="entry-btn">Открыть ленту →</span>
+        </div>
+        <div class="entry-list" id="entryList"></div>
+      </a>
+      <div class="quick">
+        <span class="quick-item">Новый платёж<small>демо</small></span>
+        <span class="quick-item">Выписка<small>демо</small></span>
+        <span class="quick-item">Валютный контроль<small>демо</small></span>
+        <a class="quick-item quick-live" href="#/profile">Профиль компании<small>для персонализации</small></a>
+      </div>
+    </section>
+
+    <!-- Бизнес-аналитика -->
+    <section class="view" id="view-insights" hidden>
+      <div class="page-head">
+        <div><p class="eyebrow">Бизнес‑аналитика</p><h1 id="insightsTitle">Лента для компании</h1><p class="muted" id="insightsRole"></p></div>
+        <div class="filters">
+          <div class="segmented" id="directionFilter" role="tablist">
+            <button data-direction="" class="on">Все</button>
+            <button data-direction="risk">Риски</button>
+            <button data-direction="opportunity">Возможности</button>
+          </div>
+          <select id="importanceFilter" aria-label="Важность">
+            <option value="1">Важность от 1</option>
+            <option value="2">Важность от 2</option>
+            <option value="3" selected>Важность от 3</option>
+            <option value="4">Важность от 4</option>
+          </select>
+        </div>
+      </div>
+      <div class="topics" id="topics"></div>
+      <div class="legend"><span class="who who-ai">AI</span> интерпретация для вашей компании <span class="who who-bank">Альфа‑Банк</span> материалы аналитиков банка <span class="who who-src">Источник</span> первоисточник новости</div>
+      <div class="insights">
+        <div class="feed" id="feed"></div>
+        <article class="detail" id="detail" aria-live="polite"></article>
+      </div>
+    </section>
+
+    <!-- Демо-разделы -->
+    <section class="view" id="view-demo" hidden>
+      <div class="page-head"><div><p class="eyebrow">Демо</p><h1 id="demoTitle">Раздел</h1></div></div>
+      <div class="panel empty"><p>Этот раздел интернет-банка в прототипе не реализован.</p><a class="button-link" href="#/insights">Перейти в бизнес‑аналитику</a></div>
+    </section>
+
+    <!-- Профиль компании (мастер) -->
+    <section class="view" id="view-profile" hidden>
+      <div class="page-head">
+        <div><p class="eyebrow">Профиль компании</p><h1>Расскажите о бизнесе — лента подстроится</h1><p class="muted">Данные компании, ваши ответы и подобранные по материалам банка темы. Каждый вывод можно сверить с исходным полем и журналом.</p></div>
+        <button id="restartButton" class="secondary" hidden>Начать сначала</button>
+      </div>
+      <div id="start" class="panel"><h2>1. Выбор компании</h2><p class="muted">Данные обезличены. Найдите компанию по ID, отрасли или региону.</p><div class="searchline"><input id="companySearch" placeholder="Например, U_200890 или металлы" autocomplete="off"><button id="searchButton">Найти</button></div><div id="searchResults" class="results"></div><div class="divider">или</div><div class="searchline"><input id="manualName" placeholder="Название компании (необязательно)"><button id="manualButton" class="secondary">Создать вручную</button></div></div>
+      <div id="workspace" hidden>
+        <nav class="steps" aria-label="Этапы"><a href="#draft">Черновик</a><a href="#fields">Исходные данные</a><a href="#questions">Уточнения</a><a href="#assessment">Темы</a><a href="#sources">Источники и итог</a></nav>
+        <section id="draft" class="panel"><div class="section-head"><div><span class="stepnum">02</span><h2>Понятный черновик</h2></div><button id="overviewButton" hidden>Обновить черновик</button></div><p class="muted">Модель кратко описывает данные и отмечает пробелы. Для каждого вывода показаны исходные поля.</p><div id="overview"></div></section>
+        <section id="fields" class="panel"><div class="section-head"><div><span class="stepnum">02</span><h2>Поля и сигналы</h2></div><span class="pill">Исходные значения сохраняются</span></div><p class="muted">Раскройте список, чтобы посмотреть или исправить поля. Пустые поля можно оставить незаполненными.</p><details id="fieldsDetails"><summary>Показать поля и сигналы</summary><div id="facts"></div><details><summary>Показать исходные поля CSV</summary><div id="rawFacts" class="raw-grid"></div></details><details><summary>Показать наблюдаемые связи и платежи</summary><div id="signals"></div></details></details><button id="manualReadyButton" hidden>Готово, сформировать черновик</button></section>
+        <section id="edit" class="panel"><h2>Исправить профиль словами</h2><p class="muted">Напишите правку обычными словами или укажите точный ключ поля. Модель предложит изменение для подтверждения.</p><div class="searchline"><input id="naturalEdit" placeholder="Например: город регистрации теперь Томск"><button id="proposeButton" class="secondary">Предложить правку</button></div><div id="proposal"></div></section>
+        <section id="questions" class="panel"><div class="section-head"><div><span class="stepnum">03</span><h2>Уточнения от пользователя</h2></div><button id="confirmProfileButton">Подтвердить профиль</button></div><p class="muted">Заполните то, что знаете. Любой вопрос можно пропустить и оставить пустым.</p><div id="questionsList"></div><div id="issues"></div></section>
+        <section id="assessment" class="panel"><div class="section-head"><div><span class="stepnum">04</span><h2>Предварительные темы</h2></div><button id="retryAgentButton" class="secondary" hidden>Повторить подбор тем</button></div><p class="muted">После подтверждения профиля агент обратится к библиотеке аналитики банка. При необходимости он задаст до двух вопросов.</p><div id="agentStatus"></div><div id="agentQuestion"></div><div id="assessmentBody"></div><div id="assessmentActions"></div></section>
+        <section id="sources" class="panel"><div class="section-head"><div><span class="stepnum">05</span><h2>Источники и результат</h2></div><button id="exportButton">Сохранить профиль</button></div><p class="muted">После сохранения профиль передаётся в бизнес‑аналитику: новые новости оцениваются для вашей компании. Сайты сохраняются как настройки будущего поиска.</p><label class="fieldlabel" for="sitesInput">Сайты через запятую</label><input id="sitesInput" placeholder="example.com, https://news.example.org"><div class="searchline compact"><select id="sitesMode"><option value="include">Искать также на этих сайтах</option><option value="only">Искать только на этих сайтах</option></select><button id="saveSitesButton" class="secondary">Сохранить сайты</button></div><div id="exportResult"></div></section>
+        <section id="audit" class="panel"><div class="section-head"><div><span class="stepnum">ЛОГ</span><h2>Ход работы</h2></div><button id="refreshTraceButton" class="secondary">Обновить журнал</button></div><p id="tracePath" class="muted"></p><div id="traceEvents" class="trace-list"></div></section>
+      </div>
+    </section>
+  </div>
+</div>
 </body>
 </html>

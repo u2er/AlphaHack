@@ -5,10 +5,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from .controller import Controller
+from .insights import Insights, InsightsError
 
 STATIC = Path(__file__).resolve().parent
 MIME = {'index.html':'text/html; charset=utf-8','app.js':'text/javascript; charset=utf-8',
-        'style.css':'text/css; charset=utf-8'}
+        'bank.js':'text/javascript; charset=utf-8','style.css':'text/css; charset=utf-8'}
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AlfaProfileGUI/1'
@@ -58,6 +59,8 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(path.query).get('q',[''])[0][:100]
                 return self.json(200,{'companies':self.server.controller.companies(query)})
             parts = path.path.strip('/').split('/')
+            if parts[:2] == ['api','insights']:
+                return self._insights(parts[2:],parse_qs(path.query))
             if len(parts) >= 3 and parts[:2] == ['api','sessions']:
                 session = self.server.controller.get(parts[2])
                 if len(parts) == 3:
@@ -79,6 +82,20 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self.error_json(500,'Внутренняя ошибка; проверьте терминал')
             raise
+
+    def _insights(self, parts, query):
+        insights = self.server.insights
+        try:
+            if parts == ['profiles']:
+                return self.json(200,{'profiles':insights.profiles()})
+            if len(parts) == 2 and parts[0] == 'profiles':
+                return self.json(200,insights.profile(parts[1]))
+            if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'feed':
+                importance = min(max(int(query.get('min_importance',['1'])[0]),0),5)
+                return self.json(200,{'items':insights.feed(parts[1],importance)})
+        except InsightsError as exc:
+            return self.error_json(502,str(exc))
+        return self.error_json(404,'Не найдено')
 
     def do_POST(self):
         try:
@@ -116,9 +133,10 @@ class Handler(BaseHTTPRequestHandler):
             self.error_json(500,'Внутренняя ошибка; проверьте терминал')
             raise
 
-def create_server(host='127.0.0.1',port=8765,controller=None):
+def create_server(host='127.0.0.1',port=8765,controller=None,insights=None):
     server = ThreadingHTTPServer((host,port),Handler)
     server.controller = controller or Controller()
+    server.insights = insights or Insights(store=getattr(server.controller,'store',None))
     return server
 
 def main():

@@ -79,7 +79,8 @@ curl -s localhost:8000/health | jq
 ```
 
 Поднимаются `eventgraph` (API), `eventgraph-worker`, `eventgraph-profile-gui`
-(мастер профиля, http://127.0.0.1:8765) и `eventgraph-db` (Postgres с
+(интерфейс «Альфа-Бизнес»: бизнес-аналитика и мастер профиля,
+http://127.0.0.1:8765, см. `gui/README.md`) и `eventgraph-db` (Postgres с
 pgvector). Без `EMB_BASE_URL` эмбеддер локальный: модель (~1 ГБ) качается в
 том `data` при первой записи.
 

@@ -55,6 +55,8 @@ services:
     environment:
       <<: *env
       GUI_RUNS_DIR: /data/gui-runs
+      # Лента бизнес-аналитики: GUI ходит в API с API_KEY из .env, браузер ключа не видит.
+      EVENTGRAPH_URL: http://api:8000
     ports:
       # Без входа по паролю — только на локальном интерфейсе.
       - "127.0.0.1:${PROFILE_GUI_PORT:-8765}:8765"
@@ -64,6 +66,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      api:
+        condition: service_started
 
   profile-prepare:
     # Разовая подготовка библиотеки профиля: CSV приложения 1 и OCR + векторы

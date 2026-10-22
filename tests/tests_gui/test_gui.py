@@ -168,6 +168,49 @@ class GuiTests(unittest.TestCase):
             finally:
                 server.shutdown();server.server_close();controller.close();thread.join(timeout=2)
 
+    def test_insights_proxy_keeps_the_key_server_side_and_adds_bank_fragments(self):
+        import httpx
+        from gui.insights import Insights
+        seen=[]
+        def handler(request):
+            seen.append((request.url.path,request.headers.get('X-Api-Key')))
+            if request.url.path=='/profiles':
+                return httpx.Response(200,json=[{'id':'p1','name':'Клиент','active':True},{'id':'p0','name':'Старый','active':False}])
+            if request.url.path=='/profiles/p1':
+                return httpx.Response(200,json={'id':'p1','name':'Клиент','payload':{
+                    'user_context':{'user_role':{'value':'Финансовый директор'}},
+                    'evidence':{'source:1':{'filename':'bank.pdf','page':1,'date_hint':'2026'}},
+                    'monitoring_context':{'topics':[{'title':'Ставка','rationale':'Кредит','source_ids':['source:1']}]}}})
+            if request.url.path=='/profiles/p1/feed':
+                return httpx.Response(200,json=[{'uid':'01A','title':'ЦБ сохранил ставку','analysis':{'importance':4,'impact':'Дорогой кредит'}}])
+            return httpx.Response(404,json={})
+        insights=Insights(store=FakeStore(),base_url='http://eventgraph',api_key='secret',transport=httpx.MockTransport(handler))
+        self.assertEqual([p['id'] for p in insights.profiles()],['p1'])
+        profile=insights.profile('p1')
+        self.assertEqual((profile['user_role'],profile['topics'][0]['sources'][0]['filename']),('Финансовый директор','bank.pdf'))
+        item=insights.feed('p1',3)[0]
+        self.assertEqual(item['bank'][0]['filename'],'bank.pdf')
+        self.assertIn(('/profiles/p1/feed','secret'),seen)
+        with self.assertRaises(KeyError):insights.profile('missing')
+        server=create_server(port=0,controller=Controller(FakeStore(),FakeClient,tempfile.mkdtemp()),insights=insights)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            base=f'http://127.0.0.1:{server.server_port}'
+            feed=json.loads(urlopen(base+'/api/insights/profiles/p1/feed?min_importance=3').read())
+            self.assertEqual(feed['items'][0]['analysis']['importance'],4)
+            page=urlopen(base+'/').read().decode()
+            self.assertIn('Бизнес‑аналитика',page)
+            self.assertNotIn('secret',page+urlopen(base+'/bank.js').read().decode())
+        finally:
+            server.shutdown();server.server_close()
+
+    def test_insights_without_eventgraph_report_a_readable_error(self):
+        from gui.insights import Insights, InsightsError
+        with self.assertRaisesRegex(InsightsError,'API_KEY'):
+            Insights(api_key='').profiles()
+        with self.assertRaisesRegex(InsightsError,'недоступен'):
+            Insights(base_url='http://127.0.0.1:9',api_key='k').profiles()
+
     def test_field_catalog_covers_csv_and_updates_without_changing_data(self):
         root=Path(__file__).resolve().parents[2]
         for csv_path in (root/'формулировка и данные хакатона'/'приложение 1').glob('*.csv'):
