@@ -67,7 +67,8 @@
 - **Инструменты переименованы:** `casket_graph_*` → `graph_*`. Атомы Casket
   (`casket_save_atom` и т. п.) не перенесены — эти агенты ими не пользуются.
 - **Одна модель на всех агентов** (OpenAI-совместимый API), один эмбеддер на
-  граф и сюжеты: OpenAI-совместимый или локальный fastembed.
+  граф, сюжеты и библиотеку профиля: OpenAI-совместимый или локальный
+  fastembed. Профиль компании читает те же `LLM_*` и ту же базу.
 
 ## Запуск
 
@@ -77,9 +78,17 @@ docker compose up -d --build
 curl -s localhost:8000/health | jq
 ```
 
-Поднимаются `eventgraph` (API), `eventgraph-worker` и `eventgraph-db`
-(Postgres с pgvector). Без `EMB_BASE_URL` эмбеддер локальный: модель
-(~1 ГБ) качается в том `data` при первой записи.
+Поднимаются `eventgraph` (API), `eventgraph-worker`, `eventgraph-profile-gui`
+(мастер профиля, http://127.0.0.1:8765) и `eventgraph-db` (Postgres с
+pgvector). Без `EMB_BASE_URL` эмбеддер локальный: модель (~1 ГБ) качается в
+том `data` при первой записи.
+
+Библиотеку для мастера профиля — CSV приложения 1 и OCR + векторы PDF
+приложения 2 в схему `profile_data` той же базы — готовят один раз:
+
+```bash
+docker compose run --rm profile-prepare            # --replace — пересобрать
+```
 
 ## Источники
 
@@ -119,21 +128,49 @@ curl -s -H "$H" localhost:8000/graph/processed | jq '.[0]'                      
 | `gardener` | раз в `maintenance_every_days` дней, между записями: дубли, островки, обрезка | чтение, запись, удаление, обслуживание | 60 |
 | `analyst` | перед `news`, на каждую запись: насколько она важна для компании и как может повлиять на её бизнес, с оглядкой на прошлые события графа | чтение | 30 |
 
-Профиль компании — переменная `COMPANY_PROFILE`, она подставляется в
-`prompts/analyst.md` вместо `{{company_profile}}`. Пока она пуста, в промпте
-стоит заготовка. Оценка лежит в `items.analysis`: обязательны `importance`
-(0–5, для компании, а не для мира) и `impact`, остальные поля — `relevance`,
-`direction`, `horizon`, `trend`, `areas`, `entities`, `related_events`,
-`actions`, `confidence`, `headline` — описаны в конце промпта. Сбой
-аналитика разбор не останавливает: запись уходит в `news` без оценки
-(`analysis.error`), а повторная попытка разбора оценивает её снова.
+Аналитик оценивает каждую запись для каждого клиента — см. «Профили
+клиентов» ниже. Оценка лежит в `items.analysis.profiles[profile_id]`:
+обязательны `importance` (0–5, для клиента, а не для мира) и `impact`,
+остальные поля — `relevance`, `direction`, `horizon`, `trend`, `areas`,
+`entities`, `related_events`, `actions`, `confidence`, `headline` — описаны в
+конце промпта. Верхние поля `items.analysis` — самая важная из оценок с её
+`profile_id`. Сбой аналитика разбор не останавливает: запись уходит в `news`
+без оценки (`error`), а повторная попытка разбора оценивает её снова — только
+для тех клиентов, у кого оценки ещё нет.
 
 Порог важности — `min_importance` в `PUT /graph/settings` (по умолчанию из
-`ANALYST_MIN_IMPORTANCE`, 0 — без порога). Запись с оценкой ниже порога
-закрывается вердиктом `below_threshold`: агент `news` её не видит, в граф она
-не попадает, оценка остаётся в `items.analysis`. Запись без оценки порог не
-задерживает. Снизили порог — `POST /graph/requeue-below-threshold` вернёт такие
-записи в очередь, и они сверятся с новым порогом без повторной оценки.
+`ANALYST_MIN_IMPORTANCE`, 0 — без порога). Запись ниже порога **для всех
+клиентов** закрывается вердиктом `below_threshold`: агент `news` её не видит,
+в граф она не попадает, оценки остаются. Важная хоть одному клиенту идёт в
+общий граф. Запись без оценки порог не задерживает. Снизили порог или добавили
+клиента — `POST /graph/requeue-below-threshold` вернёт такие записи в очередь:
+сделанные оценки не повторяются, новый клиент получает свою.
+
+## Профили клиентов
+
+Профиль — подтверждённый экспорт мастера профиля (`profile/`, `gui/`):
+JSON `schema_version=1`, контракт — `profile/contract.py` (`ProfileExport`).
+Пример — `tests/fixtures/profiles/vectorfood.json`. Попадает в EventGraph
+двумя путями:
+
+- GUI и CLI мастера кладут экспорт в `PROFILES_DIR` (в compose — общий том
+  `/profiles`); воркер загружает новые и изменённые файлы перед разбором;
+- `PUT /profiles` с тем же JSON.
+
+Аналитик видит профиль текстом `render_for_prompt` (ответы пользователя,
+поля карточки с оговорками, связи без имён контрагентов, подтверждённые темы
+и ограничения) вместо `{{company_profile}}` в `prompts/analyst.md`; текст
+хранится в `company_profiles.prompt` и подставляется в ран
+(`agent_runs.variables`). Пока не загружено ни одного профиля, работает один
+профиль `default` из `COMPANY_PROFILE` (пусто — заготовка). Лента клиента —
+`GET /profiles/{id}/feed`: записи с его оценкой не ниже `min_importance`,
+важные первыми.
+
+```bash
+curl -s -X PUT -H "$H" -H 'Content-Type: application/json' \
+  --data @tests/fixtures/profiles/vectorfood.json localhost:8000/profiles | jq
+curl -s -H "$H" 'localhost:8000/profiles/demo-vectorfood/feed?min_importance=3' | jq '.[] | {title, analysis}'
+```
 
 Каждый ран пишется в `agent_runs`, каждый шаг — в `agent_logs`: рассуждения,
 вызовы с аргументами и ответами, ошибки (`GET /agent-runs/{id}`). Запустить
@@ -157,6 +194,9 @@ curl -s -H "$H" localhost:8000/graph/processed | jq '.[0]'                      
 | `POST` | `/graphs/{graph}/search` · `/graphs/{graph}/neighbors` | поиск по смыслу, окрестность |
 | `GET` | `/graphs/{graph}/period?since=&until=` | события периода и кто был в центре |
 | `GET` `POST` | `/agents` · `/agent-runs[/{id}]` · `/agent-runs/{id}/stop` | агенты и их раны |
+| `GET` `PUT` | `/profiles` | профили клиентов; PUT — экспорт мастера профиля (новая версия по `profile_id`) |
+| `GET` `DELETE` | `/profiles/{id}` | профиль с текстом для аналитика; DELETE — снять с оценки (лента остаётся) |
+| `GET` | `/profiles/{id}/feed?min_importance=` | лента клиента по его оценкам; `default` — профиль из `COMPANY_PROFILE` |
 
 В граф через API не пишут: пишут только агенты, в воркере, одна запись за
 другой.
@@ -165,8 +205,12 @@ curl -s -H "$H" localhost:8000/graph/processed | jq '.[0]'                      
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest      # EventGraph, профиль, GUI, парсер
 ```
+
+Профиль и GUI с хоста ходят в базу из compose через
+`PROFILE_DATABASE_URL=postgresql://eventgraph:eventgraph@127.0.0.1:5433/eventgraph`
+(см. `profile/README.md`).
 
 Интеграционные тесты (`-m integration`) идут на живом Postgres с pgvector и
 подставном эмбеддере:

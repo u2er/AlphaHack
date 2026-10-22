@@ -28,8 +28,14 @@ class AgentSpec:
 
     @property
     def prompt(self) -> str:
-        # Профиль компании — из настроек, чтобы его правка не трогала промпт.
-        return load_prompt(self.prompt_file).replace("{{company_profile}}", settings.company_profile.strip())
+        return self.prompt_for()
+
+    def prompt_for(self, variables: dict[str, str] | None = None) -> str:
+        """Промпт с подстановками рана. Профиль компании — из рана (аналитик
+        оценивает запись для конкретного клиента), иначе из настроек: правка
+        профиля не трогает промпт."""
+        profile = (variables or {}).get("company_profile") or settings.company_profile
+        return load_prompt(self.prompt_file).replace("{{company_profile}}", profile.strip())
 
 
 SPECS: dict[str, AgentSpec] = {

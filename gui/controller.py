@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 import threading
 from uuid import uuid4
@@ -8,13 +9,14 @@ from profile.agent import ProfileAgent
 from profile.draft import prepare_overview, suggest_edit, apply_edit
 from profile.models import EditProposal
 from profile.service import (QUESTIONS, LABELS, answer, clear_answer, clear_fact, confirm_assessment, confirm_profile,
-                             create_profile, export_profile, missing_questions, profile_issues,
+                             create_profile, export_profile, publish, missing_questions, profile_issues,
                              save, set_fact, set_sites)
 from profile.trace import ProfileTrace, TracedClient, TracedStore
 from utils.config import settings
 from utils.llm import make_client
 
-RUNS = Path(__file__).resolve().parent/'runs'
+# In a container the code directory is read-only for the service user: GUI_RUNS_DIR points at a volume.
+RUNS = Path(os.getenv('GUI_RUNS_DIR') or Path(__file__).resolve().parent/'runs')
 
 class Session:
     def __init__(self, session_id, profile, store, trace, run_dir, client_factory, field_labels, field_value_labels):
@@ -253,7 +255,11 @@ class Session:
             path.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
             self.status = 'complete'
             self.trace.record('profile_exported',path=str(path))
-            return {'profile':payload,'path':str(path),'trace_path':str(self.trace.path)}
+            shared = publish(payload)
+            if shared:
+                self.trace.record('profile_published',path=str(shared))
+            return {'profile':payload,'path':str(path),'trace_path':str(self.trace.path),
+                    'published':str(shared) if shared else None}
 
     def trace_events(self, limit=80):
         limit = min(max(int(limit),1),200)

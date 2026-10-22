@@ -4,6 +4,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -65,25 +66,54 @@ def _client() -> Any:
 
 
 @lru_cache(maxsize=1)
+def _sync_client() -> Any:
+    from openai import OpenAI
+
+    base = settings.emb_base_url.rstrip("/")
+    return OpenAI(base_url=base if base.endswith("/v1") else f"{base}/v1",
+                  api_key=settings.emb_api_key or "none")
+
+
+def _cache_dir() -> Path:
+    cache = settings.data_dir / "models"
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Запуск вне контейнера (CLI профиля, тесты): /data может быть не наш.
+        cache = Path.home() / ".cache" / "eventgraph" / "models"
+        cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+@lru_cache(maxsize=1)
 def _local_model() -> Any:
     from fastembed import TextEmbedding  # тяжёлый импорт — только когда нужен
 
-    cache = settings.data_dir / "models"
-    cache.mkdir(parents=True, exist_ok=True)
-    return TextEmbedding(settings.emb_model, cache_dir=str(cache), threads=2)
+    return TextEmbedding(settings.emb_model, cache_dir=str(_cache_dir()), threads=2)
 
 
-def _prefix() -> str:
-    # E5 обучали с префиксами; для сравнения текстов между собой — query.
-    return "query: " if "e5" in settings.emb_model.lower() else ""
+def _prefix(passage: bool = False) -> str:
+    # E5 обучали с префиксами; для сравнения текстов между собой — query,
+    # для фрагментов документов, среди которых ищут, — passage.
+    if "e5" not in settings.emb_model.lower():
+        return ""
+    return "passage: " if passage else "query: "
 
 
 def _normalize(vectors: np.ndarray) -> np.ndarray:
     return vectors / np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)
 
 
-def _local_sync(texts: list[str]) -> np.ndarray:
-    vectors = np.array(list(_local_model().embed([_prefix() + t for t in texts], batch_size=16)), dtype=np.float32)
+def _local_sync(texts: list[str], passage: bool = False) -> np.ndarray:
+    prefix = _prefix(passage)
+    vectors = np.array(list(_local_model().embed([prefix + t for t in texts], batch_size=16)), dtype=np.float32)
+    return _normalize(vectors)
+
+
+def _remote_sync(texts: list[str], passage: bool = False) -> np.ndarray:
+    response = _sync_client().embeddings.create(model=settings.emb_model,
+                                                input=[_prefix(passage) + t for t in texts])
+    vectors = np.array([d.embedding for d in sorted(response.data, key=lambda d: d.index)], dtype=np.float32)
     return _normalize(vectors)
 
 
@@ -118,3 +148,20 @@ async def embed(texts: list[str], urgent: bool = False) -> np.ndarray:
 
 async def embed_one(text: str, urgent: bool = True) -> np.ndarray:
     return (await embed([text], urgent=urgent))[0]
+
+
+def embed_sync(texts: list[str], passage: bool = False) -> np.ndarray:
+    """То же, синхронно и без очереди: для библиотеки профиля (profile.db),
+    которая живёт вне цикла событий. `passage` — фрагменты документов, среди
+    которых ищут; запросы и тексты для сравнения — без него."""
+    texts = _clean(texts)
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+    create = _remote_sync if remote() else _local_sync
+    step = max(1, settings.emb_batch)
+    return np.vstack([create(texts[start:start + step], passage) for start in range(0, len(texts), step)])
+
+
+def model_name() -> str:
+    """Чем считаны векторы: модель и где она работает — для сверки с индексом."""
+    return f"{'remote' if remote() else 'local'}:{settings.emb_model}"

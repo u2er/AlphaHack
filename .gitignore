@@ -6,3 +6,6 @@ venv/
 .pytest_cache/
 .DS_Store
 data/
+pdfs/
+# Файловый лог utils/logging_config.json (пишется в рабочий каталог).
+logs.txt

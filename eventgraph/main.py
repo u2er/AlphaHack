@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from eventgraph import embed
-from eventgraph.api import agents, connectors, graph, graph_data, items
+from eventgraph.api import agents, connectors, graph, graph_data, items, profiles
 from eventgraph.config import settings
 from eventgraph.connectors import service
 from eventgraph.db import create_schema, engine
@@ -73,3 +73,4 @@ app.include_router(items.router)
 app.include_router(graph.router)
 app.include_router(graph_data.router)
 app.include_router(agents.router)
+app.include_router(profiles.router)

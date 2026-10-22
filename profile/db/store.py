@@ -3,47 +3,55 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import logging
-from pathlib import Path
 import numpy as np
-from .connection import ROOT, connect, database_url
+from .connection import connect, database_url
 
-DEFAULT_MODEL = ROOT / 'models' / 'multilingual-e5-large'
 log = logging.getLogger('alfa.profile.db')
 
 
-class E5:
-    def __init__(self, path=DEFAULT_MODEL):
-        self.path = Path(path)
-        self._model = None
+class SharedEmbedder:
+    """The EventGraph embedder (EMB_MODEL / EMB_BASE_URL): one model for the graph and the library."""
+
+    def __init__(self, chunk_chars=None):
+        self._chunk_chars = chunk_chars
 
     @property
-    def model(self):
-        if self._model is None:
-            if not self.path.is_dir():
-                raise FileNotFoundError('Local E5 model is missing')
-            import torch
-            from sentence_transformers import SentenceTransformer
-            torch.set_num_threads(4)
-            self._model = SentenceTransformer(str(self.path), local_files_only=True,
-                                             trust_remote_code=False, device='cpu')
-        return self._model
+    def name(self):
+        from eventgraph import embed
+        return embed.model_name()
+
+    @property
+    def chunk_chars(self):
+        if self._chunk_chars:
+            return self._chunk_chars
+        from eventgraph.config import settings
+        # E5 reads 512 tokens; most sentence-transformers models stop at 128.
+        return 1500 if 'e5' in settings.emb_model.lower() else 500
 
     def split(self, text):
-        offsets = self.model.tokenizer(text, add_special_tokens=False,
-                                      return_offsets_mapping=True)['offset_mapping']
-        return [text[offsets[i][0]:offsets[min(i + 440, len(offsets)) - 1][1]]
-                for i in range(0, len(offsets), 380)]
+        """Overlapping windows cut at whitespace so a fragment fits the model's input."""
+        size, text = self.chunk_chars, ' '.join(text.split())
+        step, chunks, start = size - size // 5, [], 0
+        while start < len(text):
+            end = min(start + size, len(text))
+            if end < len(text) and (cut := text.rfind(' ', start + step // 2, end)) > start:
+                end = cut
+            chunks.append(text[start:end].strip())
+            if end == len(text):
+                break
+            start = max(end - size // 5, start + 1)
+        return [chunk for chunk in chunks if chunk]
 
     def encode(self, texts, query=False):
-        prefix = 'query: ' if query else 'passage: '
-        return np.asarray(self.model.encode([prefix + t for t in texts], batch_size=8,
-                          normalize_embeddings=True, show_progress_bar=False), dtype='<f4')
+        from eventgraph import embed
+        return np.asarray(embed.embed_sync(list(texts), passage=not query), dtype='<f4')
 
 
 class Store:
     def __init__(self, dsn=None, embedder=None):
         self.dsn = database_url(dsn)
-        self.embedder = embedder or E5()
+        self.embedder = embedder or SharedEmbedder()
+        self._index_checked = False
 
     @contextmanager
     def connection(self, *, vector=False):
@@ -101,12 +109,24 @@ class Store:
                                 'Период, валюта и назначение платежей не указаны; полнота покрытия неизвестна.',
                                 'Суммы не равны выручке или доле зависимости компании.']}
 
+    def _check_index(self, c):
+        """Vectors of another model are not comparable: refuse instead of returning noise."""
+        name = getattr(self.embedder, 'name', None)
+        if self._index_checked or not name:
+            return
+        row = c.execute("SELECT value FROM profile_data.metadata WHERE key='embedding_model'", ()).fetchone()
+        if row and row['value'] != name:
+            raise ValueError(f'Library was indexed with {row["value"]}, the embedder is {name}: '
+                             'rerun python -m profile.db.prepare --replace')
+        self._index_checked = True
+
     def search(self, query, limit=5):
         if not query.strip():
             return []
         vector = self.embedder.encode([query], query=True)[0]
         limit = min(max(int(limit), 1), 10)
         with self.connection(vector=True) as c:
+            self._check_index(c)
             rows = c.execute('''SELECT ch.id,ch.text,ch.page,d.filename,d.sha256,d.date_hint,d.extraction,
                 1 - (ch.embedding <=> %s) AS score
                 FROM profile_data.chunks ch JOIN profile_data.documents d ON ch.document_id=d.id

@@ -133,6 +133,7 @@ async def execute(run_id: int) -> None:
         state, last_run_at = connector.state or {}, connector.last_run_at
 
     test = run.kind == "test"
+    timeout = source.timeout or settings.connector_timeout
     try:
         outcome = await asyncio.wait_for(
             asyncio.to_thread(
@@ -144,11 +145,11 @@ async def execute(run_id: int) -> None:
                 test=test,
                 main_loop=asyncio.get_running_loop(),
             ),
-            timeout=settings.connector_timeout,
+            timeout=timeout,
         )
     except asyncio.TimeoutError:
         # Поток прервать нельзя — он доработает вхолостую, результат выброшен.
-        outcome = Outcome(status="timeout", error=f"collect не уложилась в {settings.connector_timeout} с")
+        outcome = Outcome(status="timeout", error=f"collect не уложилась в {timeout} с")
 
     new = 0
     if outcome.status == "ok" and not test:

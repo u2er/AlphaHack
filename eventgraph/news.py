@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 
-from eventgraph import analyst, stories
+from eventgraph import analyst, profiles, stories
 from eventgraph.agents import runner
 from eventgraph.config import settings
 from eventgraph.db import SessionLocal
@@ -214,16 +214,24 @@ async def process(item: Item, connector: str, cfg: "GraphSettings") -> dict[str,
     ошибка и `ok` — дошёл ли ран до ответа. Ран без ответа (модель недоступна,
     ран упал) — повод для паузы: следующая запись, скорее всего, упадёт так же.
 
-    До агента новостей запись оценивает аналитик (analyst.py): в графе ещё
-    нет этой записи, только прошлые новости."""
+    До агента новостей запись оценивает аналитик (analyst.py) — для каждого
+    активного профиля клиента (profiles.py): в графе ещё нет этой записи,
+    только прошлые новости. Уже сделанные оценки не повторяются."""
     files = image_files(item, cfg.item_images) if cfg.item_images > 0 and settings.llm_vision else []
     pictures, events = [name for name, _ in files], await story_events(item)
-    analysis, assessed = None, None
-    if analyst.needed(item):
-        analysis, assessed = await analyst.assess(
-            render(item, connector, _now(), settings.news_item_chars, pictures, events, task=analyst.TASK),
-            item.uid, dict(files))
-    if reason := analyst.below(analysis or item.analysis, cfg.min_importance):
+    clients = await profiles.active()
+    assessments, fresh, assessed = analyst.by_profile(item.analysis), False, None
+    if analyst.configured():
+        message = None
+        for client in clients:
+            if (assessments.get(client.id) or {}).get("impact"):
+                continue
+            message = message or render(item, connector, _now(), settings.news_item_chars, pictures, events,
+                                        task=analyst.TASK)
+            assessments[client.id], assessed = await analyst.assess(message, item.uid, dict(files), client)
+            fresh = True
+    analysis = analyst.combine(assessments) if fresh else None
+    if reason := analyst.below_all(assessments, [c.id for c in clients], cfg.min_importance):
         return await _below_threshold(item, connector, analysis, reason, assessed)
     message = render(item, connector, _now(), settings.news_item_chars, pictures, events)
     run_id = await runner.create("news", message, attachments=dict(files))

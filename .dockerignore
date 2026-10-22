@@ -10,3 +10,15 @@ __pycache__/
 .venv/
 venv/
 data/
+
+# Локальные проходы мастера профиля: значения полей и ответы пользователя.
+gui/runs/
+profile/drafts/
+profile/output/
+profile/logs/
+
+# PDF, которые оператор кладёт для PDF-источника (том ./pdfs).
+pdfs/
+
+# Файловый лог utils/logging_config.json.
+logs.txt

@@ -15,22 +15,37 @@ class Settings(StrictModel):
     model: str = "deepseek-flash"
     api_key: SecretStr
     structured_output: Literal["auto", "responses", "json_schema"] = "auto"
-    timeout_seconds: float = 120
-    max_tokens: int = 5500
+    timeout_seconds: float = 300
+    # Reasoning models spend most of the budget thinking: deepseek-flash used up to ~4.5k
+    # reasoning tokens on the profile overview, so 5500 cut answers off.
+    max_tokens: int = 16000
     extra_body: dict = {}
 
 
+def _env(*names: str, default: str = "") -> str:
+    """First non-empty variable: the shared EventGraph name, then the legacy profile one."""
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return default
+
+
 def settings() -> Settings:
+    # Same variables as eventgraph.config, so one .env configures every agent.
     load_dotenv(ROOT / ".env", override=False)
+    extra = json.loads(_env("LLM_PARAMS", "LLM_EXTRA_BODY", default="{}"))
+    if not isinstance(extra, dict):
+        raise ValueError("LLM_PARAMS must be a JSON object")
     return Settings(
-        provider=os.getenv("LLM_PROVIDER", "openai_compatible"),
-        base_url=os.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
-        model=os.getenv("LLM_MODEL", "deepseek-flash"),
-        api_key=SecretStr(os.getenv("LLM_API_KEY", "")),
-        structured_output=os.getenv("LLM_STRUCTURED_OUTPUT", "auto"),
-        timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
-        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "5500")),
-        extra_body=json.loads(os.getenv("LLM_EXTRA_BODY", "{}")),
+        provider=_env("LLM_PROVIDER", default="openai_compatible"),
+        base_url=_env("LLM_BASE_URL", default="https://api.deepseek.com"),
+        model=_env("LLM_MODEL", default="deepseek-flash"),
+        api_key=SecretStr(_env("LLM_API_KEY")),
+        structured_output=_env("LLM_STRUCTURED_OUTPUT", default="auto"),
+        timeout_seconds=float(_env("LLM_TIMEOUT", "LLM_TIMEOUT_SECONDS", default="300")),
+        max_tokens=int(_env("LLM_MAX_TOKENS", default="16000")),
+        extra_body=extra,
     )
 
 

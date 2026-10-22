@@ -8,6 +8,13 @@ case "$1" in
   worker)
     exec python -m eventgraph.worker
     ;;
+  profile-gui)
+    exec python -m gui --host 0.0.0.0 --port 8765
+    ;;
+  profile-prepare)
+    shift
+    exec python -m profile.db.prepare "$@"
+    ;;
   test)
     exec pytest -q
     ;;

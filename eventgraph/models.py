@@ -81,9 +81,9 @@ class Item(Base):
     Агент новостей разбирает каждую запись отдельным раном, как только она
     собрана (news.py): `agent_run_id` — его ран, `verdict` — что он решил
     (stored | merged | skipped | failed; below_threshold — аналитик оценил
-    запись ниже порога важности, и агент её не разбирал), `outcome` — событие графа или
-    причина отказа, `analysis` — оценка аналитика для компании, сделанная до
-    разбора. Фильтров до агента
+    запись ниже порога важности для всех клиентов, и агент её не разбирал),
+    `outcome` — событие графа или причина отказа, `analysis` — оценки аналитика
+    по профилям клиентов, сделанные до разбора. Фильтров до агента
     нет: в разбор идёт всё собранное. Запись получает сюжет (stories.py), и
     почти дословный повтор уже разобранного закрывается как duplicate.
     """
@@ -118,9 +118,30 @@ class Item(Base):
     # Сюжет — id первой записи сюжета; записи одного сюжета идут агенту вместе.
     story_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     outcome: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    # Оценка аналитика для компании (analyst.py): importance 0–5, impact и
-    # прочие поля схемы из prompts/analyst.md; при сбое — error. Ран — run_id.
+    # Оценки аналитика (analyst.py) — по профилю клиента в `profiles`:
+    # {profile_id: {importance 0–5, impact, …, run_id}} или {error, run_id}.
+    # Верхние поля — самая важная из оценок с её `profile_id`: по ним идут
+    # порог и сводки, а лента клиента (GET /profiles/{id}/feed) — по его оценке.
     analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class CompanyProfile(Base):
+    """Профиль клиента — подтверждённый экспорт мастера профиля (profile/contract.py,
+    schema_version 1). Аналитик оценивает каждую запись для каждого активного
+    профиля; `prompt` — текст профиля, который он видит вместо {{company_profile}}.
+    `source`: api — загружен PUT /profiles, file — из PROFILES_DIR, env — COMPANY_PROFILE."""
+
+    __tablename__ = "company_profiles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(300), default="")
+    company_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    source: Mapped[str] = mapped_column(String(20), default="api")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 # ── обслуживание графа ──────────────────────────────────────────────────────
@@ -196,6 +217,9 @@ class AgentRun(Base):
     history: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     # Картинки рана: имя, под которым их видит агент, → путь от каталога данных.
     attachments: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict)
+    # Подстановки в промпт агента: {"company_profile": "…"} — профиль, для
+    # которого аналитик оценивает запись. Пусто — из настроек.
+    variables: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
     output: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

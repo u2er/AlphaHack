@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
-from eventgraph import gardening, graph_settings, news, stories
+from eventgraph import gardening, graph_settings, news, profiles, stories
 from eventgraph.agents import runner
 from eventgraph.config import settings
 from eventgraph.connectors import service
@@ -39,6 +39,8 @@ class Worker:
         await service.sync()
         await self._recover()
         await gardening.recover()
+        if loaded := await profiles.sync_dir():
+            logger.info("профили клиентов из %s: %s", settings.profiles_dir, loaded)
         lost = await runner.recover()
         if lost:
             logger.info("раны агентов прерваны перезапуском: %s", lost)
@@ -198,6 +200,8 @@ class Worker:
             paused = graph_settings.paused_until(control)
             if paused is not None and paused > _now():
                 return
+            # Новые экспорты мастера профиля — до оценки следующей записи.
+            await profiles.sync_dir()
             # Сюжеты для записей, которые при сборе не получили вектора.
             await stories.organize()
             while not self._stop.is_set():

@@ -11,7 +11,7 @@ from .draft import prepare_overview, suggest_edit, apply_edit
 from .trace import ProfileTrace, TracedClient, TracedStore
 from .metadata import field_context
 from .service import (QUESTIONS, LABELS, create_profile, set_fact, answer, missing_questions, confirm_profile,
-                      confirm_assessment, set_sites, export_profile, save, load, profile_issues, restore_source_facts)
+                      confirm_assessment, set_sites, export_profile, publish, save, load, profile_issues, restore_source_facts)
 
 def display(value):
     print(json.dumps(value,ensure_ascii=False,indent=2))
@@ -194,6 +194,9 @@ def wizard(store, resume=None, output=None):
         trace.record('profile_exported',path=str(target),profile_id=p.id)
         display(result)
         print('Готовый профиль:',target)
+        if shared := publish(result):
+            trace.record('profile_published',path=str(shared),profile_id=p.id)
+            print('Передан в EventGraph:',shared)
     finally:
         save(p,draft)
         trace.record('draft_saved',path=str(draft),profile_id=p.id)
@@ -204,7 +207,7 @@ def wizard(store, resume=None, output=None):
 
 def main():
     parser = argparse.ArgumentParser(description='Пять этапов подготовки профиля компании')
-    parser.add_argument('--dsn',help='PostgreSQL DSN; defaults to PROFILE_DATABASE_URL')
+    parser.add_argument('--dsn',help='PostgreSQL DSN; defaults to PROFILE_DATABASE_URL, then DATABASE_URL')
     parser.add_argument('--resume',type=Path)
     parser.add_argument('--output',type=Path)
     parser.add_argument('--list',metavar='QUERY',help='Поиск компаний без запуска анкеты')

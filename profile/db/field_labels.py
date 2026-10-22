@@ -94,7 +94,7 @@ def ensure_field_labels(connection) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Update field descriptions in PostgreSQL')
-    parser.add_argument('--dsn', help='PostgreSQL DSN; defaults to PROFILE_DATABASE_URL')
+    parser.add_argument('--dsn', help='PostgreSQL DSN; defaults to PROFILE_DATABASE_URL, then DATABASE_URL')
     args = parser.parse_args()
     with connect(args.dsn) as connection:
         ensure_field_labels(connection)

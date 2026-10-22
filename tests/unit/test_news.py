@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from eventgraph import news
+from eventgraph import news, profiles
 from eventgraph.config import settings
 from eventgraph.graph_settings import GraphSettings
 from eventgraph.models import AgentRun, Item
@@ -82,14 +82,16 @@ def test_summary_drops_the_verdict_block():
 
 @pytest.fixture
 def world(monkeypatch):
-    state = {"messages": [], "attachments": [], "replies": [], "stored": {}, "events": [], "agents": []}
+    state = {"messages": [], "attachments": [], "replies": [], "stored": {}, "events": [], "agents": [],
+             "variables": [], "clients": [profiles.fallback()]}
     record = item("01A", "Мэр ушёл", title="Мэр ушёл", url="https://x/1")
     state["item"] = record
 
-    async def create(agent, message, history=None, attachments=None):
+    async def create(agent, message, history=None, attachments=None, variables=None):
         state["agents"].append(agent)
         state["messages"].append(message)
         state["attachments"].append(attachments or {})
+        state["variables"].append(variables or {})
         return 40 + len(state["messages"])
 
     async def execute(run_id):
@@ -114,10 +116,14 @@ def world(monkeypatch):
     async def story_events(it):
         return state["events"]
 
+    async def active():
+        return state["clients"]
+
     monkeypatch.setattr(news.runner, "create", create)
     monkeypatch.setattr(news.runner, "execute", execute)
     monkeypatch.setattr(news, "SessionLocal", Session)
     monkeypatch.setattr(news, "story_events", story_events)
+    monkeypatch.setattr(news.profiles, "active", active)
     monkeypatch.setattr(settings, "news_max_attempts", 3)
     monkeypatch.setattr(settings, "llm_api_key", "k")
     monkeypatch.setattr(settings, "agents", "news")
@@ -225,7 +231,8 @@ async def test_a_failed_assessment_does_not_stop_the_record(world, monkeypatch):
     result = await news.process(world["item"], "ria", GraphSettings())
 
     assert result["verdict"] == "stored" and result["importance"] is None
-    assert world["stored"]["analysis"] == {"error": "Provider returned 503", "run_id": 41}
+    failed = {"error": "Provider returned 503", "run_id": 41}
+    assert world["stored"]["analysis"] == {**failed, "profile_id": "default", "profiles": {"default": failed}}
 
 
 async def test_a_record_below_the_threshold_never_reaches_the_news_agent(world, monkeypatch):
@@ -260,3 +267,54 @@ async def test_a_requeued_record_is_checked_against_the_new_threshold_without_a_
     world["replies"].append(done())
     assert (await news.process(world["item"], "ria", GraphSettings(min_importance=2)))["verdict"] == "stored"
     assert world["agents"] == ["news"]
+
+
+# ── несколько клиентов ──────────────────────────────────────────────────────
+
+
+def clients(*ids):
+    return [profiles.Active(i, f"Клиент {i}", f"Профиль клиента {i}") for i in ids]
+
+
+async def test_each_client_gets_its_own_assessment_with_its_own_profile(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["clients"] = clients("steel", "food")
+    world["replies"] += [assessed(importance=1), assessed(importance=4), done()]
+
+    result = await news.process(world["item"], "ria", GraphSettings())
+
+    assert world["agents"] == ["analyst", "analyst", "news"]
+    assert [v["company_profile"] for v in world["variables"][:2]] == ["Профиль клиента steel", "Профиль клиента food"]
+    analysis = world["stored"]["analysis"]
+    assert (analysis["importance"], analysis["profile_id"], result["importance"]) == (4, "food", 4)
+    assert {pid: a["importance"] for pid, a in analysis["profiles"].items()} == {"steel": 1, "food": 4}
+
+
+async def test_a_record_important_to_one_client_reaches_the_shared_graph(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["clients"] = clients("steel", "food")
+    world["replies"] += [assessed(importance=1), assessed(importance=3), done()]
+    assert (await news.process(world["item"], "ria", GraphSettings(min_importance=3)))["verdict"] == "stored"
+
+
+async def test_a_record_below_the_threshold_for_every_client_is_closed(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["clients"] = clients("steel", "food")
+    world["replies"] += [assessed(importance=1), assessed(importance=2)]
+
+    result = await news.process(world["item"], "ria", GraphSettings(min_importance=3))
+
+    assert world["agents"] == ["analyst", "analyst"] and result["verdict"] == "below_threshold"
+    assert world["item"].outcome == {"reason": "важность ниже порога 3 для всех клиентов (2), наибольшая — 2"}
+
+
+async def test_a_new_client_is_assessed_without_repeating_the_others(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["item"].analysis = {"importance": 2, "impact": "Фон.", "run_id": 9}  # оценка до профилей — default
+    world["clients"] = [profiles.fallback(), *clients("food")]
+    world["replies"] += [assessed(importance=5), done()]
+
+    await news.process(world["item"], "ria", GraphSettings())
+
+    assert world["agents"] == ["analyst", "news"]
+    assert set(world["stored"]["analysis"]["profiles"]) == {"default", "food"}

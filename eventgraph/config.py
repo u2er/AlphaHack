@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # работают, а записи просто копятся.
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
-    llm_model: str = "deepseek-chat"
+    llm_model: str = "deepseek-flash"
     # Видит ли модель картинки: без этого записи уходят агенту только текстом.
     llm_vision: bool = False
     # Дополнительные параметры запроса JSON-объектом, например
@@ -92,10 +92,14 @@ class Settings(BaseSettings):
     # Перед разбором каждой записи аналитик оценивает её для компании:
     # важность и как она может повлиять на бизнес (analyst.py). Профиль
     # подставляется в его промпт вместо {{company_profile}}.
+    # Действует, пока не загружен ни один профиль клиента (eventgraph/profiles.py).
     company_profile: str = COMPANY_PROFILE_PLACEHOLDER
-    # Порог важности для компании по умолчанию (PUT /graph/settings —
-    # min_importance): запись с оценкой ниже не идёт агенту новостей и в граф.
-    # 0 — без порога.
+    # Каталог экспортов мастера профиля (profile/contract.py): воркер загружает
+    # новые и изменённые файлы перед разбором. Пусто — только PUT /profiles.
+    profiles_dir: Path | None = None
+    # Порог важности по умолчанию (PUT /graph/settings — min_importance):
+    # запись, которая ниже порога для всех клиентов, не идёт агенту новостей и
+    # в граф. 0 — без порога.
     analyst_min_importance: int = 0
 
     # ── Сюжеты ───────────────────────────────────────────────────────────────
@@ -121,6 +125,12 @@ class Settings(BaseSettings):
             if not isinstance(data, dict):
                 raise ValueError("LLM_PARAMS — JSON-объект")
         return value
+
+    @field_validator("profiles_dir", mode="before")
+    @classmethod
+    def _empty_dir_is_none(cls, value: Any) -> Any:
+        # PROFILES_DIR= в .env — «каталога нет», а не текущий каталог.
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("company_profile")
     @classmethod

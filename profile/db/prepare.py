@@ -1,4 +1,4 @@
-"""Offline import of appendix 1 and E5 indexing of appendix 2 into PostgreSQL."""
+"""Offline import of appendix 1 and indexing of appendix 2 into the EventGraph PostgreSQL."""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,7 @@ from psycopg.types.json import Jsonb
 
 from .connection import ROOT, connect, executemany, copy_rows
 from .field_labels import ensure_field_labels
-from .store import DEFAULT_MODEL, E5
+from .store import SharedEmbedder
 from parser.loader import load_parser
 from parser.csv import csv_rows
 from utils.logging_utils import setup_logging
@@ -46,7 +46,7 @@ DDL = (
         text text NOT NULL, PRIMARY KEY(document_id,page))''',
     '''CREATE TABLE profile_data.chunks (
         id text PRIMARY KEY, document_id text REFERENCES profile_data.documents(id),
-        page integer, text text NOT NULL, embedding vector(1024) NOT NULL)''',
+        page integer, text text NOT NULL, embedding vector({dimensions}) NOT NULL)''',
     '''CREATE INDEX chunks_document_idx ON profile_data.chunks (document_id)''',
     '''CREATE TABLE profile_data.metadata (key text PRIMARY KEY, value text NOT NULL)''',
 )
@@ -84,20 +84,23 @@ def validate_document(document, path: Path):
     if not isinstance(pages, list) or not pages:
         raise ValueError(f'Parser must return a nonempty pages list: {path.name}')
     for number, page in enumerate(pages, 1):
+        # A cover or a scan without a text layer is an empty page, not a broken document.
         if (not isinstance(page, dict) or page.get('page') != number
-                or not isinstance(page.get('text'), str) or not page['text'].strip()
+                or not isinstance(page.get('text'), str)
                 or not isinstance(page.get('extraction'), str) or not page['extraction'].strip()):
             raise ValueError(f'Invalid parser result for page {number}: {path.name}')
+    if not any(page['text'].strip() for page in pages):
+        raise ValueError(f'Parser found no text in the document: {path.name}')
     return pages, document['date_hint'].strip()
 
 
-def prepare(source=DEFAULT_SOURCE, dsn=None, model_path=DEFAULT_MODEL,
-            parser_spec=None, replace=False, embedder=None):
+def prepare(source=DEFAULT_SOURCE, dsn=None, parser_spec=None, replace=False, embedder=None):
     source = Path(source)
     if not parser_spec:
         raise ValueError('Specify a document parser with --parser parser.module:function')
     parser = load_parser(parser_spec)
-    embedder = embedder or E5(model_path)
+    embedder = embedder or SharedEmbedder()
+    dimensions = int(np.asarray(embedder.encode(['probe'])).shape[1])
     with connect(dsn) as connection:
         connection.execute('CREATE EXTENSION IF NOT EXISTS vector')
         existing = connection.execute("SELECT to_regclass('profile_data.companies') AS table_name").fetchone()['table_name']
@@ -107,7 +110,7 @@ def prepare(source=DEFAULT_SOURCE, dsn=None, model_path=DEFAULT_MODEL,
             connection.execute('DROP SCHEMA profile_data CASCADE')
         connection.execute('CREATE SCHEMA IF NOT EXISTS profile_data')
         for statement in DDL:
-            connection.execute(statement)
+            connection.execute(statement.replace('{dimensions}', str(dimensions)))
         ensure_field_labels(connection)
         import_csv(connection, source / 'приложение 1')
         pdfs = sorted((source / 'приложение 2').glob('*.pdf'))
@@ -125,12 +128,12 @@ def prepare(source=DEFAULT_SOURCE, dsn=None, model_path=DEFAULT_MODEL,
             for page in pages:
                 connection.execute('INSERT INTO profile_data.pages VALUES (%s,%s,%s)',
                                    (digest, page['page'], page['text']))
-                chunks = embedder.split(page['text'])
+                chunks = embedder.split(page['text']) if page['text'].strip() else []
                 if not chunks:
-                    raise ValueError(f'No searchable text on page {page["page"]}: {pdf.name}')
+                    continue
                 vectors = np.asarray(embedder.encode(chunks), dtype=np.float32)
-                if vectors.shape != (len(chunks), 1024):
-                    raise ValueError(f'E5 must return one 1024-dimensional vector per chunk: {pdf.name}')
+                if vectors.shape != (len(chunks), dimensions):
+                    raise ValueError(f'Embedder must return one {dimensions}-dimensional vector per chunk: {pdf.name}')
                 executemany(connection, '''INSERT INTO profile_data.chunks VALUES (%s,%s,%s,%s,%s)''',
                     ((f'{digest}:{page["page"]}:{i}', digest, page['page'], text, vector)
                      for i, (text, vector) in enumerate(zip(chunks, vectors))))
@@ -138,9 +141,9 @@ def prepare(source=DEFAULT_SOURCE, dsn=None, model_path=DEFAULT_MODEL,
         connection.execute('''CREATE INDEX chunks_embedding_hnsw_idx ON profile_data.chunks
             USING hnsw (embedding vector_cosine_ops)''')
         executemany(connection, 'INSERT INTO profile_data.metadata VALUES (%s,%s)',
-            [('embedding_model', 'multilingual-e5-large'),
-             ('embedding_prefixes', 'query: / passage: '),
-             ('parser', parser_spec), ('schema_version', '2')])
+            [('embedding_model', getattr(embedder, 'name', type(embedder).__name__)),
+             ('embedding_dimensions', str(dimensions)),
+             ('parser', parser_spec), ('schema_version', '3')])
         connection.execute('ANALYZE profile_data.chunks')
         log.info('Готово: %d документов, %d фрагментов', len(pdfs), chunk_count)
         return {'documents': len(pdfs), 'chunks': chunk_count}
@@ -149,13 +152,12 @@ def prepare(source=DEFAULT_SOURCE, dsn=None, model_path=DEFAULT_MODEL,
 def main():
     command = argparse.ArgumentParser(description='Индексировать приложения 1 и 2 в PostgreSQL')
     command.add_argument('--source', type=Path, default=DEFAULT_SOURCE)
-    command.add_argument('--dsn', help='PostgreSQL DSN; defaults to PROFILE_DATABASE_URL')
-    command.add_argument('--model', type=Path, default=DEFAULT_MODEL)
-    command.add_argument('--parser', required=True, help='parser.module:function')
+    command.add_argument('--dsn', help='PostgreSQL DSN; defaults to PROFILE_DATABASE_URL, then DATABASE_URL')
+    command.add_argument('--parser', default='parser.pdf:parse_document', help='parser.module:function')
     command.add_argument('--replace', action='store_true', help='Replace only profile_data in one transaction')
     args = command.parse_args()
     setup_logging()
-    print(prepare(args.source, args.dsn, args.model, args.parser, args.replace))
+    print(prepare(args.source, args.dsn, args.parser, args.replace))
 
 
 if __name__ == '__main__':

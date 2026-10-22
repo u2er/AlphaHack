@@ -125,8 +125,10 @@ def main():
     import argparse
     parser=argparse.ArgumentParser(description='Локальный GUI для тестирования профиля')
     parser.add_argument('--port',type=int,default=8765)
+    # 0.0.0.0 only inside a container, where compose publishes the port on 127.0.0.1.
+    parser.add_argument('--host',default='127.0.0.1')
     args=parser.parse_args()
-    server=create_server(port=args.port)
+    server=create_server(host=args.host,port=args.port)
     print(f'Откройте http://127.0.0.1:{args.port}/',flush=True)
     try:
         server.serve_forever()

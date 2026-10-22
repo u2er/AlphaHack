@@ -10,11 +10,16 @@ services:
     environment: &env
       DATABASE_URL: postgresql+asyncpg://eventgraph:${DB_PASSWORD:-eventgraph}@db:5432/eventgraph
       DATA_DIR: /data
+      # Модели docling (~1 ГБ) качаются один раз и живут в томе данных.
+      HF_HOME: /data/hf
+      # Экспорты мастера профиля: GUI кладёт сюда, воркер загружает.
+      PROFILES_DIR: /profiles
     ports:
       - "${PORT:-8000}:8000"
     volumes:
       # Картинки записей; API отдаёт их по /items/{uid}/images/{n}.
       - data:/data
+      - profiles:/profiles
     depends_on:
       db:
         condition: service_healthy
@@ -29,14 +34,58 @@ services:
       - .env
     environment: *env
     volumes:
-      # Картинки записей и кеш локального эмбеддера (data/models).
+      # Картинки записей, кеш локального эмбеддера (data/models),
+      # модели docling (data/hf) и кэш PDF-парсера (data/pdf_cache).
+      - data:/data
+      - ./pdfs:/data/pdfs
+      - profiles:/profiles
+    depends_on:
+      db:
+        condition: service_healthy
+
+  profile-gui:
+    # Мастер профиля компании: выбор компании, ответы, темы, экспорт в /profiles.
+    build: .
+    container_name: eventgraph-profile-gui
+    restart: unless-stopped
+    command: ["./entrypoint.sh", "profile-gui"]
+    user: "${EVENTGRAPH_UID:-1000}:${EVENTGRAPH_GID:-1000}"
+    env_file:
+      - .env
+    environment:
+      <<: *env
+      GUI_RUNS_DIR: /data/gui-runs
+    ports:
+      # Без входа по паролю — только на локальном интерфейсе.
+      - "127.0.0.1:${PROFILE_GUI_PORT:-8765}:8765"
+    volumes:
+      - data:/data
+      - profiles:/profiles
+    depends_on:
+      db:
+        condition: service_healthy
+
+  profile-prepare:
+    # Разовая подготовка библиотеки профиля: CSV приложения 1 и OCR + векторы
+    # PDF приложения 2 в схему profile_data той же базы.
+    #   docker compose run --rm profile-prepare            (первый раз)
+    #   docker compose run --rm profile-prepare --replace  (пересборка)
+    build: .
+    profiles: ["setup"]
+    command: ["./entrypoint.sh", "profile-prepare"]
+    user: "${EVENTGRAPH_UID:-1000}:${EVENTGRAPH_GID:-1000}"
+    env_file:
+      - .env
+    environment: *env
+    volumes:
       - data:/data
     depends_on:
       db:
         condition: service_healthy
 
   db:
-    # Postgres с pgvector: записи, раны агентов и граф с векторами — в одной базе.
+    # Postgres с pgvector: записи, раны агентов, граф с векторами и библиотека
+    # профиля (схема profile_data) — в одной базе.
     image: pgvector/pgvector:pg16
     container_name: eventgraph-db
     restart: unless-stopped
@@ -44,6 +93,9 @@ services:
       POSTGRES_USER: eventgraph
       POSTGRES_PASSWORD: ${DB_PASSWORD:-eventgraph}
       POSTGRES_DB: eventgraph
+    ports:
+      # Для CLI профиля и тестов с хоста; только локальный интерфейс.
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
     volumes:
       - pg:/var/lib/postgresql/data
     healthcheck:
@@ -55,3 +107,4 @@ services:
 volumes:
   data:
   pg:
+  profiles:

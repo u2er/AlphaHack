@@ -186,6 +186,9 @@ class OpenAICompatibleClient:
                 data = response.json()
                 if self.mode == "responses":
                     if data.get("status") != "completed":
+                        reason = (data.get("incomplete_details") or {}).get("reason")
+                        if reason == "max_output_tokens":
+                            raise LLMError("LLM response cut at max_output_tokens; raise LLM_MAX_TOKENS")
                         raise LLMError("LLM response incomplete or failed")
                     parts = [part for item in data["output"] if item["type"] == "message"
                              and item.get("role") == "assistant" for part in item["content"]]

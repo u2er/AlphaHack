@@ -217,13 +217,13 @@ async def _cancelled(run_id: int) -> bool:
 
 
 async def create(agent: str, message: str, history: list[dict[str, Any]] | None = None,
-                 attachments: dict[str, str] | None = None) -> int:
-    """Ран в очереди; исполняет его `execute`."""
+                 attachments: dict[str, str] | None = None, variables: dict[str, str] | None = None) -> int:
+    """Ран в очереди; исполняет его `execute`. `variables` — подстановки в промпт."""
     if agent not in SPECS:
         raise ValueError(f"unknown agent '{agent}'")
     async with SessionLocal() as session:
         run = AgentRun(agent=agent, status="queued", input=message, history=list(history or []),
-                       attachments=dict(attachments or {}))
+                       attachments=dict(attachments or {}), variables=dict(variables) if variables else None)
         session.add(run)
         await session.commit()
         return run.id
@@ -274,13 +274,14 @@ async def execute(run_id: int) -> AgentRun:
         row.status, row.started_at = "running", _now()
         await session.commit()
         agent, task, history, attachments = row.agent, row.input, list(row.history or []), dict(row.attachments or {})
+        variables = dict(row.variables or {})
 
     spec = SPECS[agent]
     stats = {"steps": 0, "tool_calls": 0, "tokens_prompt": 0, "tokens_completion": 0}
     started = time.perf_counter()
     try:
         outcome = await asyncio.wait_for(
-            _loop(run_id, spec, task, history, attachments, stats), timeout=settings.run_timeout
+            _loop(run_id, spec, task, history, attachments, stats, variables), timeout=settings.run_timeout
         )
     except asyncio.TimeoutError:
         outcome = {"status": "error", "error": f"ран не уложился в {settings.run_timeout} с", "output": ""}
@@ -300,7 +301,8 @@ async def execute(run_id: int) -> AgentRun:
 
 
 async def _loop(run_id: int, spec: AgentSpec, task: str, prior: list[dict[str, Any]],
-                attachments: dict[str, str], stats: dict[str, int]) -> dict[str, Any]:
+                attachments: dict[str, str], stats: dict[str, int],
+                variables: dict[str, str] | None = None) -> dict[str, Any]:
     ctx = ToolContext(spec=spec, graph=settings.graph_name, attachments=attachments)
     tools: dict[str, Tool] = {tool.name: tool for tool in build_tools(ctx)}
     schemas = [tool.schema() for tool in tools.values()] or None
@@ -310,7 +312,7 @@ async def _loop(run_id: int, spec: AgentSpec, task: str, prior: list[dict[str, A
     if spec.drop_tool_history:
         prior = [t for t in prior if t.get("role") != "tool"]
     prior = trim_history(prior, spec.max_history)
-    messages: list[dict[str, Any]] = [{"role": "system", "content": f"{spec.prompt}\n\n{system_text(ctx)}"}]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": f"{spec.prompt_for(variables)}\n\n{system_text(ctx)}"}]
     messages += [{"role": t["role"], "content": t["content"]} for t in prior
                  if t.get("role") in ("user", "assistant") and t.get("content")]
     messages.append({"role": "user", "content": task})

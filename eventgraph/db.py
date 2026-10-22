@@ -16,6 +16,7 @@ class Base(DeclarativeBase):
 # create_all не добавляет колонки в уже созданные таблицы — их добавляют здесь.
 COLUMNS = (
     "ALTER TABLE items ADD COLUMN IF NOT EXISTS analysis JSONB",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS variables JSONB",
 )
 
 

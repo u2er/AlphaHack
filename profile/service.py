@@ -1,6 +1,7 @@
 from __future__ import annotations
 import ipaddress
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -148,13 +149,26 @@ def confirm_assessment(p):
 def export_profile(p):
     if not p.profile_confirmed or not p.assessment_confirmed:
         raise ValueError('Both profile and suggested topics require confirmation')
-    return {'schema_version':'1','profile_id':p.id,'company_id':p.company_id,
-            'company_facts':{k:v.model_dump() for k,v in p.facts.items()},
-            'source_facts':{k:v.model_dump() for k,v in p.source_facts.items()},
-            'draft_overview':p.overview.model_dump() if p.overview else None,
-            'user_context':{k:v.model_dump() for k,v in p.answers.items()},
-            'relationship_signals':p.signals,'monitoring_context':p.assessment.model_dump(),
-            'evidence':p.evidence,'source_preferences':p.source_preferences,'updated_at':p.updated_at}
+    from .contract import ProfileExport
+    return ProfileExport(
+        profile_id=p.id, company_id=p.company_id,
+        company_facts=p.facts, source_facts=p.source_facts, draft_overview=p.overview,
+        user_context=p.answers, relationship_signals=p.signals, monitoring_context=p.assessment,
+        evidence=p.evidence, source_preferences=p.source_preferences, updated_at=p.updated_at,
+    ).model_dump(mode='json')
+
+def publish(payload, folder=None):
+    """Copy a confirmed export to PROFILES_DIR, where the EventGraph worker picks it up.
+    Returns the path, or None when no shared folder is configured."""
+    folder = folder or os.getenv('PROFILES_DIR', '').strip()
+    if not folder:
+        return None
+    path = Path(folder)/f"{payload['profile_id']}.json"
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp = path.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
+    tmp.replace(path)
+    return path
 
 def save(p, path):
     path = Path(path)
