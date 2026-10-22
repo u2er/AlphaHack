@@ -1,0 +1,46 @@
+"""PostgreSQL connection shared by indexing and profile reads."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def database_url(dsn: str | None = None) -> str:
+    if dsn:
+        return dsn
+    load_dotenv(ROOT / '.env', override=False)
+    value = os.getenv('PROFILE_DATABASE_URL', '').strip()
+    if not value:
+        raise ValueError('Set PROFILE_DATABASE_URL to a PostgreSQL DSN; see profile/db/README.md')
+    return value
+
+
+def connect(dsn: str | None = None, *, vector: bool = False):
+    import psycopg
+    from psycopg.rows import dict_row
+
+    connection = psycopg.connect(database_url(dsn), row_factory=dict_row)
+    if vector:
+        from pgvector.psycopg import register_vector
+        try:
+            register_vector(connection)
+        except Exception:
+            connection.close()
+            raise
+    return connection
+
+
+def executemany(connection, sql, rows):
+    with connection.cursor() as cursor:
+        cursor.executemany(sql, rows)
+
+
+def copy_rows(connection, statement, rows):
+    """Stream large CSV-derived tables without holding all rows in memory."""
+    with connection.cursor() as cursor:
+        with cursor.copy(statement) as stream:
+            for row in rows:
+                stream.write_row(row)

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Альфа · Профиль компании</title>
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar"><div class="brand"><span class="mark">А</span><span>Альфа <b>Профиль</b></span></div><div class="buttonrow"><span class="badge">Локальный тестовый стенд</span><button id="restartButton" class="secondary" hidden>Начать сначала</button></div></header>
+  <main>
+    <div class="hero"><div><p class="eyebrow">ОБРАЗ КОМПАНИИ</p><h1>Соберите контекст для будущей новостной аналитики</h1><p>Пройдите путь от данных компании до тем наблюдения. Каждый вывод можно сверить с исходным полем и журналом работы.</p></div><div class="hero-count">01<span> / 05</span></div></div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="start" class="panel"><h2>1. Выбор компании</h2><p class="muted">Данные обезличены. Найдите компанию по ID, отрасли или региону.</p><div class="searchline"><input id="companySearch" placeholder="Например, U_200890 или металлы" autocomplete="off"><button id="searchButton">Найти</button></div><div id="searchResults" class="results"></div><div class="divider">или</div><div class="searchline"><input id="manualName" placeholder="Название компании (необязательно)"><button id="manualButton" class="secondary">Создать вручную</button></div></div>
+    <div id="workspace" hidden>
+      <nav class="steps" aria-label="Этапы"><a href="#draft">Черновик</a><a href="#fields">Исходные данные</a><a href="#questions">Уточнения</a><a href="#assessment">Темы</a><a href="#sources">Источники и итог</a></nav>
+      <section id="draft" class="panel"><div class="section-head"><div><span class="stepnum">02</span><h2>Понятный черновик</h2></div><button id="overviewButton" hidden>Обновить черновик</button></div><p class="muted">Модель кратко описывает данные и отмечает пробелы. Для каждого вывода показаны исходные поля.</p><div id="overview"></div></section>
+      <section id="fields" class="panel"><div class="section-head"><div><span class="stepnum">02</span><h2>Поля и сигналы</h2></div><span class="pill">Исходные значения сохраняются</span></div><p class="muted">Раскройте список, чтобы посмотреть или исправить поля. Пустые поля можно оставить незаполненными.</p><details id="fieldsDetails"><summary>Показать поля и сигналы</summary><div id="facts"></div><details><summary>Показать исходные поля CSV</summary><div id="rawFacts" class="raw-grid"></div></details><details><summary>Показать наблюдаемые связи и платежи</summary><div id="signals"></div></details></details><button id="manualReadyButton" hidden>Готово, сформировать черновик</button></section>
+      <section id="edit" class="panel"><h2>Исправить профиль словами</h2><p class="muted">Напишите правку обычными словами или укажите точный ключ поля. Модель предложит изменение для подтверждения.</p><div class="searchline"><input id="naturalEdit" placeholder="Например: город регистрации теперь Томск"><button id="proposeButton" class="secondary">Предложить правку</button></div><div id="proposal"></div></section>
+      <section id="questions" class="panel"><div class="section-head"><div><span class="stepnum">03</span><h2>Уточнения от пользователя</h2></div><button id="confirmProfileButton">Подтвердить профиль</button></div><p class="muted">Заполните то, что знаете. Любой вопрос можно пропустить и оставить пустым.</p><div id="questionsList"></div><div id="issues"></div></section>
+      <section id="assessment" class="panel"><div class="section-head"><div><span class="stepnum">04</span><h2>Предварительные темы</h2></div><button id="retryAgentButton" class="secondary" hidden>Повторить подбор тем</button></div><p class="muted">После подтверждения профиля агент автоматически обратится к локальной библиотеке аналитики банка. При необходимости он задаст до двух вопросов.</p><div id="agentStatus"></div><div id="agentQuestion"></div><div id="assessmentBody"></div><div id="assessmentActions"></div></section>
+      <section id="sources" class="panel"><div class="section-head"><div><span class="stepnum">05</span><h2>Источники и результат</h2></div><button id="exportButton">Показать итоговый JSON</button></div><p class="muted">Сайты сохраняются как настройки для будущего поиска. Сейчас запросы к ним не выполняются.</p><label class="fieldlabel" for="sitesInput">Сайты через запятую</label><input id="sitesInput" placeholder="example.com, https://news.example.org"><div class="searchline compact"><select id="sitesMode"><option value="include">Искать также на этих сайтах</option><option value="only">Искать только на этих сайтах</option></select><button id="saveSitesButton" class="secondary">Сохранить сайты</button></div><div id="exportResult"></div></section>
+      <section id="audit" class="panel"><div class="section-head"><div><span class="stepnum">ЛОГ</span><h2>Ход работы</h2></div><button id="refreshTraceButton" class="secondary">Обновить журнал</button></div><p id="tracePath" class="muted"></p><div id="traceEvents" class="trace-list"></div></section>
+    </div>
+  </main>
+</body>
+</html>
