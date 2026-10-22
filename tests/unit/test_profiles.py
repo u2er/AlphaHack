@@ -103,6 +103,37 @@ async def test_the_profiles_dir_loads_new_and_changed_files_once(tmp_path, monke
     assert await profiles.sync_dir(tmp_path / "нет") == 0
 
 
+async def test_examples_load_once_and_never_overwrite_a_loaded_profile(tmp_path, monkeypatch):
+    loaded = []
+
+    async def upsert(payload, source="api"):
+        loaded.append((payload["profile_id"], source))
+
+    async def known():
+        return {"demo-vectorfood"}
+
+    monkeypatch.setattr(profiles, "upsert", upsert)
+    monkeypatch.setattr(profiles, "_known_ids", known)
+    v2 = json.loads((FIXTURE.parent / "vectorfood-v2.json").read_text(encoding="utf-8"))
+    (tmp_path / "a.json").write_text(json.dumps(v2), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps(v2 | {"profile_id": "example-u-1"}), encoding="utf-8")
+    (tmp_path / "broken.json").write_text("{", encoding="utf-8")
+
+    assert await profiles.seed_examples(tmp_path) == 1
+    assert loaded == [("example-u-1", "example")]
+
+
+def test_the_builtin_examples_are_valid_paged_profiles(monkeypatch):
+    monkeypatch.setattr(settings, "profile_examples", "builtin")
+    paths = sorted(profiles.examples_dir().glob("*.json"))
+    docs = [profiles.parse(json.loads(p.read_text(encoding="utf-8")))[0] for p in paths]
+    assert len(docs) >= 10
+    assert len({d.profile_id for d in docs}) == len(docs)
+    assert {d.company_id for d in docs if d.company_id} >= {"U_26030", "U_4909"}
+    monkeypatch.setattr(settings, "profile_examples", "off")
+    assert profiles.examples_dir() is None
+
+
 # ── страничный профиль: инструменты аналитика ───────────────────────────────
 
 

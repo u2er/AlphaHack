@@ -213,3 +213,40 @@ async def sync_dir(folder: Path | None = None) -> int:
             logger.warning("профиль %s не загружен: %s", path.name, str(exc)[:300])
     return loaded
 
+
+
+EXAMPLES = Path(__file__).resolve().parent / "seed" / "profiles"
+
+
+def examples_dir() -> Path | None:
+    """PROFILE_EXAMPLES: builtin (по умолчанию), путь к своему каталогу или off."""
+    value = (settings.profile_examples or "").strip()
+    if value.lower() in ("", "off", "none", "false", "0"):
+        return None
+    return EXAMPLES if value.lower() == "builtin" else Path(value)
+
+
+async def _known_ids() -> set[str]:
+    async with SessionLocal() as session:
+        return set((await session.execute(select(CompanyProfile.id))).scalars())
+
+
+async def seed_examples(folder: Path | None = None) -> int:
+    """Профили-примеры, которых ещё нет в базе (по profile_id). Уже загруженные
+    не перезаписываются — правки пользователя и выбор источников сохраняются;
+    удалённый пример вернётся при следующем старте."""
+    folder = folder or examples_dir()
+    if not folder or not Path(folder).is_dir():
+        return 0
+    known = await _known_ids()
+    loaded = 0
+    for path in sorted(Path(folder).glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if load_profile(payload).profile_id in known:
+                continue
+            await upsert(payload, source="example")
+            loaded += 1
+        except Exception as exc:  # noqa: BLE001 — битый пример не мешает старту воркера
+            logger.warning("профиль-пример %s не загружен: %s", path.name, str(exc)[:300])
+    return loaded

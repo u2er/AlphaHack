@@ -42,6 +42,8 @@ class Worker:
         await gardening.recover()
         if loaded := await profiles.sync_dir():
             logger.info("профили клиентов из %s: %s", settings.profiles_dir, loaded)
+        if loaded := await profiles.seed_examples():
+            logger.info("профили-примеры загружены: %s", loaded)
         # Базовый граф — в фоне: векторы тысяч элементов считаются минутами.
         self._seed_task = asyncio.create_task(self._seed())
         lost = await runner.recover()

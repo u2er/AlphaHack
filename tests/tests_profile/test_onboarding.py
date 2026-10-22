@@ -117,6 +117,18 @@ class OnboardingTests(unittest.TestCase):
         self.assertNotIn('search_library', OnboardingAction.model_json_schema()['properties']['tool']['enum'])
         self.assertNotIn('search_library', SYSTEM)
 
+    def test_without_a_question_budget_the_agent_finishes_from_the_dataset(self):
+        nulls = dict(act('finish', draft=draft(main_sources=('form.activity','dataset.CITY'), extra_ref='form.activity')),
+                     query=None, file_id=None, page=None)  # models send null for another tool's fields
+        for page in nulls['draft']['pages']: page['sources'] = ['form.activity']
+        actions = [act('ask', question={'text':'Какие рынки?','kind':'text','options':[],'allow_other':False}), nulls]
+        with tempfile.TemporaryDirectory() as tmp:
+            session = Onboarding(Store(), lambda: LLM(actions), Path(tmp), max_questions=0)
+            session.submit_form(FORM)
+            self.assertTrue(wait(lambda: session.status in ('review','error')))
+            self.assertEqual(session.status, 'review', session.error)
+            self.assertEqual(session.answers, [])
+
     def test_questions_are_validated_and_answers_kept(self):
         actions = [act('ask', question={'text':'Какие рынки?','kind':'multi','options':['Россия'],'allow_other':False}),
                    act('ask', question={'text':'Какие рынки?','kind':'multi','options':['Россия','СНГ','ЕС'],'allow_other':False})]

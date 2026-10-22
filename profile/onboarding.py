@@ -25,7 +25,7 @@ from typing import Literal
 from uuid import uuid4
 
 import numpy as np
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from utils.llm import LLMError, OutputValidationError, generate_structured
 from utils.models import StrictModel, now
@@ -126,6 +126,12 @@ class OnboardingAction(StrictModel):
     question: Question | None
     draft: Draft | None
 
+    @field_validator('note', 'query', 'file_id', 'page', mode='before')
+    @classmethod
+    def _unused_null(cls, value, info):
+        # Модели присылают null в полях чужого инструмента: это пустое значение, а не ошибка.
+        return (0 if info.field_name == 'page' else '') if value is None else value
+
 
 class UploadedFile(StrictModel):
     id: str
@@ -147,8 +153,11 @@ class Onboarding:
     """One company being added. Thread-safe: the agent runs in its own thread,
     the HTTP handlers read the state and push answers, edits and files."""
 
-    def __init__(self, store, client_factory, run_dir: Path, trace=None, embedder=None, parse=None):
+    def __init__(self, store, client_factory, run_dir: Path, trace=None, embedder=None, parse=None,
+                 max_questions=MAX_QUESTIONS):
         self.id = run_dir.name
+        # 0 — без вопросов: профиль-пример собирается из анкеты и набора банка без пользователя.
+        self.max_questions = max_questions
         self.store, self.client_factory, self.run_dir, self.trace = store, client_factory, Path(run_dir), trace
         self.embedder = embedder
         self.parse = parse
@@ -396,14 +405,14 @@ class Onboarding:
                         raise OutputValidationError('page', 'Use an existing file id and page number')
                 if action.tool == 'ask':
                     q = action.question
-                    if questions >= MAX_QUESTIONS or q is None or not q.text.strip():
+                    if questions >= self.max_questions or q is None or not q.text.strip():
                         raise OutputValidationError('question', 'Question missing or question budget exhausted')
                     if q.kind != 'text' and not 2 <= len([o for o in q.options if o.strip()]) <= 7:
                         raise OutputValidationError('options', 'single/multi questions need 2–7 options')
                 if action.tool == 'finish':
                     self._check_draft(action.draft)
             action = generate_structured(client, SYSTEM, self._context(history, MAX_STEPS - step,
-                                                                       MAX_QUESTIONS - questions),
+                                                                       self.max_questions - questions),
                                          OnboardingAction, validate=validate, on_attempt=validation_trace(client))
             if action.note.strip() and action.tool != 'ask':
                 self.say('activity', 'text', action.note.strip(), tool=action.tool, query=action.query)
