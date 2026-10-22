@@ -17,6 +17,22 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
+# traineddata Tesseract (для OCR docling через tesserocr). manylinux-колесо
+# tesserocr ищет их по TESSDATA_PREFIX, а Debian хранит в версионированном
+# каталоге — подвешиваем стабильный путь.
+RUN d=$(ls -d /usr/share/tesseract-ocr/*/tessdata | head -n1) \
+    && ln -sfn "$d" /usr/share/tessdata
+
+ENV TESSDATA_PREFIX=/usr/share/tessdata
+
+# sitecustomize.py загружается интерпретатором до кода приложения: в воркере
+# (EVENTGRAPH_ROLE=worker) он заранее импортирует tesserocr в главном потоке —
+# cysignals ставит signal-обработчики при импорте, а это невозможно из потока
+# коннектора, в котором работает PDF-парсер.
+COPY sitecustomize.py /tmp/sitecustomize.py
+RUN cp /tmp/sitecustomize.py "$(python -c 'import site; print(site.getsitepackages()[0])')/sitecustomize.py" \
+    && rm /tmp/sitecustomize.py
+
 COPY . .
 RUN chmod +x entrypoint.sh \
     # Каталог данных. Именованный том при первом монтировании наследует

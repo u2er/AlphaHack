@@ -12,6 +12,8 @@ services:
       DATA_DIR: /data
       # Модели docling (~1 ГБ) качаются один раз и живут в томе данных.
       HF_HOME: /data/hf
+      # Роль процесса для sitecustomize.py (преимпорт tesserocr в воркере).
+      EVENTGRAPH_ROLE: api
     ports:
       - "${PORT:-8000}:8000"
     volumes:
@@ -29,7 +31,12 @@ services:
     user: "${EVENTGRAPH_UID:-1000}:${EVENTGRAPH_GID:-1000}"
     env_file:
       - .env
-    environment: *env
+    # Тот же набор, что у api (явный список: роль другая — см. sitecustomize.py).
+    environment:
+      DATABASE_URL: postgresql+asyncpg://eventgraph:${DB_PASSWORD:-eventgraph}@db:5432/eventgraph
+      DATA_DIR: /data
+      HF_HOME: /data/hf
+      EVENTGRAPH_ROLE: worker
     volumes:
       # Картинки записей, кеш локального эмбеддера (data/models),
       # модели docling (data/hf) и кэш PDF-парсера (data/pdf_cache).

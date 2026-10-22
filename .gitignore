@@ -7,3 +7,7 @@ venv/
 .DS_Store
 data/
 pdfs/
+# Дефолтный --cache-dir ручных примеров парсера.
+.cache_parser/
+# Тестовые PDF генерирует conftest.py (fpdf2 пишет CreationDate — хэш каждый раз новый).
+docling_parser/tests/fixtures/

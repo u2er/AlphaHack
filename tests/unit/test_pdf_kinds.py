@@ -77,6 +77,14 @@ PNG_B = b"\x89PNG\r\n\x1a\n" + b"B" * 16
 PNG_C = b"\x89PNG\r\n\x1a\n" + b"C" * 16
 
 
+def png_bytes(width: int, height: int, fill: bytes = b"") -> bytes:
+    """PNG с настоящим заголовком IHDR: коннектор читает из него размер."""
+    header = (b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR"
+              + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+              + b"\x08\x02\x00\x00\x00" + b"\x00" * 4)
+    return header + fill
+
+
 class FakeDoc:
     """То, что ParsedDocument: текстовый фрагмент и метаданные."""
 
@@ -87,7 +95,7 @@ class FakeDoc:
 
 class FakeManager:
     """Двойник PdfFileManager с тем же контрактом, что использует коннектор:
-    `extract_content()`, `.text`, `.texts`, `.content_dir`."""
+    `data_exists()`, `extract_content()`, `.text`, `.texts`, `.content_dir`."""
 
     def __init__(self, file_path: Path, cache_dir: Path, kwargs: dict, spec: dict):
         self.file_path = Path(file_path)
@@ -96,7 +104,11 @@ class FakeManager:
         self.content_dir = self.cache_dir / self.hash
         self.text = None
         self.texts = []
+        self.kwargs = kwargs
         self._spec = spec
+
+    def data_exists(self) -> bool:
+        return bool(self._spec.get("cached"))
 
     def extract_content(self) -> None:
         spec = self._spec
@@ -283,6 +295,24 @@ async def test_dir_mode_collects_images_and_tables(tmp_path, monkeypatch):
     assert records[0]["image"] == [PNG_A]
 
 
+async def test_icons_not_attached_and_not_described(tmp_path, monkeypatch):
+    """Логотипы/иконки мельче MIN_MEDIA_EDGE не попадают в запись."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    icon = png_bytes(74, 107, b"I")
+    chart = png_bytes(740, 476, b"C")
+    install_fake(monkeypatch, {
+        sha256(make_pdf("icons")): {
+            "text": "иконки", "pages": ["иконки"], "images": [icon, chart],
+        },
+    })
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "doc.pdf").write_bytes(make_pdf("icons"))
+
+    records, _ = await run({"mode": "dir", "path": str(docs)})
+    assert records[0]["image"] == [chart]
+
+
 async def test_dir_mode_missing_directory(tmp_path):
     with pytest.raises(RuntimeError, match="не найден"):
         await run({"mode": "dir", "path": str(tmp_path / "nope")})
@@ -440,6 +470,254 @@ async def test_url_mode_non_pdf_body_is_not_marked_seen(tmp_path, monkeypatch):
     assert len(records) == 1
     assert "https://example.org/ok.pdf" in ctx.state["seen"]
     assert "https://example.org/not-pdf.pdf" not in ctx.state["seen"]
+
+
+# ── описания изображений (VLM) ───────────────────────────────────────────────
+
+
+def _install_recording_fake(monkeypatch, prepared: dict) -> dict:
+    """Фейк менеджера, который запоминает kwargs, переданные движку."""
+    seen: dict = {}
+
+    def factory(file_path: Path, cache_dir: Path, kwargs: dict):
+        seen.clear()
+        seen.update(kwargs)
+        digest = sha256(Path(file_path).read_bytes())
+        return FakeManager(file_path, cache_dir, kwargs, prepared[digest])
+
+    monkeypatch.setattr(pdf, "_make_manager", factory)
+    return seen
+
+
+async def test_dir_mode_llm_vision_enables_image_describer(tmp_path, monkeypatch):
+    """LLM_API_KEY + LLM_VISION → движок получает image_describer и table_describer."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_base_url", "http://llm.test/v1")
+    seen = _install_recording_fake(monkeypatch, {
+        sha256(make_pdf("with describer")): {"text": "with describer", "pages": ["with describer"]},
+    })
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "doc.pdf").write_bytes(make_pdf("with describer"))
+
+    records, _ = await run({"mode": "dir", "path": str(docs)})
+
+    assert len(records) == 1
+    describer = seen.get("image_describer")
+    assert callable(describer)
+    # таблицы получают свой описатель (независимый бюджет)
+    assert callable(seen.get("table_describer"))
+    # сам вызов описателя фейк-менеджер не делает — только передача в движок
+
+
+async def test_dir_mode_max_tables_zero_disables_table_describer(tmp_path, monkeypatch):
+    """max_tables=0 → таблицы не описываются, картинки — описываются."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_base_url", "http://llm.test/v1")
+    seen = _install_recording_fake(monkeypatch, {
+        sha256(make_pdf("no table desc")): {"text": "no table desc", "pages": ["no table desc"]},
+    })
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "doc.pdf").write_bytes(make_pdf("no table desc"))
+
+    await run({"mode": "dir", "path": str(docs), "max_tables": 0})
+
+    assert "image_describer" in seen
+    assert "table_describer" not in seen
+
+
+async def test_options_reject_negative_max_tables():
+    with pytest.raises(ValueError, match="max_tables"):
+        await run({"mode": "dir", "path": "/tmp", "max_tables": -1})
+
+
+async def test_options_default_max_tables():
+    assert pdf.options({"mode": "dir", "path": "/tmp"})["max_tables"] == 3
+
+
+def test_cache_key_changes_with_prompt_and_scale():
+    """Смена промпта/разрешения/модели инвалидирует кэш, а цифры бюджета — нет."""
+    base = pdf._cache_key(object(), object(), 3)
+    assert base == pdf._cache_key(object(), object(), 3)   # стабилен
+    assert pdf._cache_key(object(), object(), 2) != base   # другое разрешение
+    assert pdf._cache_key(None, object(), 3) != base       # отключили описания
+
+
+async def test_parse_file_sets_scale_and_cache_key(tmp_path, monkeypatch):
+    """Движку передаются масштаб кропов и версия рецепта (для инвалидации кэша)."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    seen = _install_recording_fake(monkeypatch, {
+        sha256(make_pdf("scale")): {"text": "scale", "pages": ["scale"]},
+    })
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "doc.pdf").write_bytes(make_pdf("scale"))
+
+    await run({"mode": "dir", "path": str(docs)})
+
+    assert seen["images_scale"] == pdf.DEFAULT_IMAGES_SCALE
+    assert seen["cache_key"]                       # версия рецепта ушла в кэш
+
+
+async def test_parse_file_keeps_explicit_images_scale(tmp_path, monkeypatch):
+    """pdfparser_kwargs переопределяет масштаб по умолчанию."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    seen = _install_recording_fake(monkeypatch, {
+        sha256(make_pdf("explicit")): {"text": "explicit", "pages": ["explicit"]},
+    })
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "doc.pdf").write_bytes(make_pdf("explicit"))
+
+    await run({"mode": "dir", "path": str(docs), "pdfparser_kwargs": {"images_scale": 4}})
+
+    assert seen["images_scale"] == 4
+
+
+class _FakeCompletions:
+    """Клиент-заглушка: первый ответ пустой (кончился бюджет), второй — текст."""
+
+    def __init__(self, fail_reasoning: bool = False):
+        self.calls: list[dict] = []
+        self.fail_reasoning = fail_reasoning
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.fail_reasoning and "reasoning_effort" in kwargs:
+            raise TypeError("unexpected keyword argument 'reasoning_effort'")
+        text = "" if len(self.calls) == 1 else "описание таблицы"
+
+        class _Message:
+            content = text
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+
+        return _Response()
+
+
+def _fake_client(monkeypatch, completions):
+    fake_client = type("C", (), {"chat": type("Chat", (), {"completions": completions})()})()
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: fake_client)
+    monkeypatch.setattr(pdf, "_image_data_url", lambda image: "data:image/jpeg;base64,AA==")
+
+
+def test_describer_disables_reasoning(monkeypatch):
+    """Рассуждение отключается: иначе «думающая» модель отдаёт пустой content."""
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_params", "")
+
+    completions = _FakeCompletions()
+    _fake_client(monkeypatch, completions)
+
+    describe = pdf._make_describer(3, pdf._PICTURE_PROMPT)
+    assert describe(object()) == "описание таблицы"      # первый ответ пуст — повтор
+    assert all(call["reasoning_effort"] == "none" for call in completions.calls)
+    assert [call["max_tokens"] for call in completions.calls] == [1024, 2048]
+
+
+def test_describer_falls_back_when_reasoning_effort_unsupported(monkeypatch):
+    """Провайдер не знает reasoning_effort — запрос уходит без него."""
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_params", "")
+
+    completions = _FakeCompletions(fail_reasoning=True)
+    _fake_client(monkeypatch, completions)
+
+    describe = pdf._make_describer(3, pdf._PICTURE_PROMPT)
+    assert describe(object()) == "описание таблицы"
+    assert "reasoning_effort" not in completions.calls[-1]
+
+
+def test_describer_respects_explicit_reasoning_setting(monkeypatch):
+    """LLM_PARAMS с своим reasoning_effort не перебиваем."""
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_params", '{"reasoning_effort": "low"}')
+
+    completions = _FakeCompletions()
+    _fake_client(monkeypatch, completions)
+
+    describe = pdf._make_describer(3, pdf._PICTURE_PROMPT)
+    assert describe(object()) == "описание таблицы"
+    assert all(call["reasoning_effort"] == "low" for call in completions.calls)
+
+
+def test_describer_skips_icons_without_spending_budget(monkeypatch):
+    """Иконка — без вызова LLM, и бюджет на неё не тратится."""
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_params", "")
+
+    completions = _FakeCompletions()
+    _fake_client(monkeypatch, completions)
+
+    class Image:
+        def __init__(self, size):
+            self.size = size
+
+    describe = pdf._make_describer(1, pdf._DESCRIPTION_PROMPT)
+    assert describe(Image((74, 107))) is None      # логотип, LLM не звали
+    assert completions.calls == []
+    assert describe(Image((740, 476))) == "описание таблицы"   # бюджет цел
+    assert describe(Image((740, 476))) is None                  # бюджет исчерпан
+
+
+def test_describer_retries_with_bigger_budget_on_empty_answer(monkeypatch):
+    """Пустой content (модель потратила бюджет на рассуждение) — один повтор."""
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_params", '{"max_tokens": 512}')
+
+    completions = _FakeCompletions()
+    _fake_client(monkeypatch, completions)
+
+    describe = pdf._make_describer(3, pdf._TABLE_DESCRIPTION_PROMPT)
+    assert describe(object()) == "описание таблицы"
+    assert [call["max_tokens"] for call in completions.calls] == [512, 2048]
+
+
+def test_describer_budget_limits_calls(monkeypatch):
+    """Бюджет max_items: лишние элементы не описываются (без вызова LLM)."""
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_vision", True)
+    monkeypatch.setattr(settings, "llm_params", "")
+
+    completions = _FakeCompletions()
+    _fake_client(monkeypatch, completions)
+
+    describe = pdf._make_describer(1, pdf._DESCRIPTION_PROMPT)
+    assert describe(object()) == "описание таблицы"   # первый — пустой ответ + повтор
+    assert describe(object()) is None                  # бюджет исчерпан
+    assert len(completions.calls) == 2
+
+
+async def test_dir_mode_describer_flag_follows_llm_settings(tmp_path, monkeypatch):
+    """image_describer и table_describer передаются движку только при ключе И vision."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    spec = {"text": "plain", "pages": ["plain"]}
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    # кейс «ключ + vision» покрыт test_dir_mode_llm_vision_enables_image_describer
+    for key, vision, enabled in (("", True, False), ("test-key", False, False)):
+        monkeypatch.setattr(settings, "llm_api_key", key)
+        monkeypatch.setattr(settings, "llm_vision", vision)
+        seen = _install_recording_fake(monkeypatch, {sha256(make_pdf("plain")): spec})
+        (docs / "doc.pdf").write_bytes(make_pdf("plain"))
+        await run({"mode": "dir", "path": str(docs)})
+        assert ("image_describer" in seen) is enabled, (key, vision)
+        assert ("table_describer" in seen) is enabled, (key, vision)
 
 
 # ── провязка с sources.py ────────────────────────────────────────────────────

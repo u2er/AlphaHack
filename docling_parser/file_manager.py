@@ -6,6 +6,7 @@
 """
 from pathlib import Path
 import logging
+import shutil
 
 logger = logging.getLogger(__name__)
 from collections import defaultdict
@@ -24,12 +25,16 @@ class PdfFileManager:
 
     def __init__(self, file_path: str,
                  cache_dir: str,
+                 cache_key: str | None = None,
                  **parser_kwargs):
         """Инициализирует менеджер с параметрами парсинга и кэширования.
 
         Args:
             file_path: Путь к PDF-файлу.
             cache_dir: Директория для кэшированных результатов.
+            cache_key: Версия рецепта парсинга (промпт описаний, разрешение,
+                модель). Если кэш снят другой версией — он перепарсивается:
+                иначе в тексте остались бы описания от старых настроек.
             **parser_kwargs: Дополнительные параметры движка docling
                 (см. PDFDoclingParser).
         """
@@ -44,6 +49,7 @@ class PdfFileManager:
 
         self.hash = compute_file_sha256(self.file_path)
         self.content_dir = self.cache_dir / self.hash
+        self.cache_key = (cache_key or "").strip() or None
 
         self.texts = []
         self.text = None
@@ -58,9 +64,25 @@ class PdfFileManager:
 
 
     def data_exists(self) -> bool:
-        """Проверяет наличие кэшированных данных для текущего файла."""
+        """Проверяет наличие кэшированных данных для текущего файла.
+
+        Кэш считается годным, только если его сняли той же версией рецепта
+        парсинга (``cache_key``). Иначе описания в тексте были бы от старых
+        промптов/разрешения, а текст страниц — единственное, что читается
+        из кэша как есть.
+        """
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        return self.content_dir.exists()
+        if not self.content_dir.exists():
+            return False
+        if self.cache_key is None:
+            return True
+        marker = self._cache_key_path()
+        if not marker.exists():
+            return False
+        return marker.read_text(encoding='utf-8').strip() == self.cache_key
+
+    def _cache_key_path(self) -> Path:
+        return self.content_dir / 'cache_key'
 
 
     def extract_content(self) -> None:
@@ -75,6 +97,11 @@ class PdfFileManager:
         elif self.data_exists():
             self.load_contents()
         else:
+            if self.content_dir.exists():
+                # Кэш снят другой версией рецепта (промпт/разрешение/модель):
+                # старые описания и PNG ему не годятся — перепарсиваем с нуля.
+                logger.info(f'Кэш {self.content_dir} снят другой версией — перепарсиваю')
+                shutil.rmtree(self.content_dir)
             output = self.parser.extract_content(self.file_path)
             self.text = ParsedDocument(page_content=output["full_text"], metadata={"file": self.file_name})
             # Сначала обрабатываем изображения, чтобы получить пути для их вставки в текст
@@ -161,18 +188,32 @@ class PdfFileManager:
     def load_contents(self) -> None:
         """Загружает извлечённые данные из кэш-директории.
 
-        Текст страниц читается из 'texts/*.txt', пути к таблицам и
-        изображениям восстанавливаются из имён файлов в 'tables/' и 'images/'.
+        Текст страниц читается из 'texts/*.txt' (описания изображений и
+        таблиц уже внутри), пути к таблицам и изображениям восстанавливаются
+        из имён файлов в 'tables/' и 'images/'; описания — из сайдкар-файлов
+        'images/<n>__<page>.txt' и 'tables/<n>__<page>.txt'.
         """
         tables_dir = self.content_dir / 'tables'
         for path in sorted(tables_dir.glob('*.png'), key=lambda p: int(p.stem.split('__')[0])):
             n, page = path.stem.split('__')
             self.page_tables_paths[page].append(str(path))
+            # Пиксели и df в кэш не сохраняются — восстанавливаем только
+            # метаданные (для статистики и путей к кропам) и описание.
+            metadata = {'n': int(n), 'page': int(page), 'file': self.file_name}
+            description_path = path.with_suffix('.txt')
+            if description_path.exists():
+                metadata['description'] = description_path.read_text(encoding='utf-8').strip()
+            self.tables.append(ParsedDocument(page_content="", metadata=metadata))
 
         images_dir = self.content_dir / 'images'
         for path in sorted(images_dir.glob('*.png'), key=lambda p: int(p.stem.split('__')[0])):
             n, page = path.stem.split('__')
             self.page_images_paths[page].append(str(path))
+            metadata = {'n': int(n), 'page': int(page), 'file': self.file_name}
+            description_path = path.with_suffix('.txt')
+            if description_path.exists():
+                metadata['description'] = description_path.read_text(encoding='utf-8').strip()
+            self.images.append(ParsedDocument(page_content="", metadata=metadata))
 
         texts_dir = self.content_dir / 'texts'
         for path in sorted(texts_dir.glob('*.txt'), key=lambda p: int(p.stem)):
@@ -192,12 +233,15 @@ class PdfFileManager:
 
         Структура кэша: <cache_dir>/<sha256>/{texts,tables,images}/.
         Сохраняются только данные, которые восстанавливает load_contents:
-        постраничные тексты и PNG (полный текст документа при необходимости
-        собирается из страниц).
+        постраничные тексты (с описаниями внутри), PNG и описания
+        изображений/таблиц (images|tables/<n>__<page>.txt, при наличии);
+        полный текст документа при необходимости собирается из страниц.
         """
         self.content_dir.mkdir(parents=True, exist_ok=True)
         for subdir in ('texts', 'tables', 'images'):
             (self.content_dir / subdir).mkdir(parents=True, exist_ok=True)
+        if self.cache_key is not None:
+            self._cache_key_path().write_text(self.cache_key, encoding='utf-8')
 
         for doc in self.texts:
             file_name = f'{doc.metadata["page"]}.txt'
@@ -209,10 +253,18 @@ class PdfFileManager:
             file_name = f'{doc.metadata["n"]}__{doc.metadata["page"]}.png'
             path = str(self.content_dir / 'tables' / file_name)
             doc.metadata['image'].save(path)
+            description = doc.metadata.get('description')
+            if description:
+                with open(str(Path(path).with_suffix('.txt')), 'w', encoding='utf-8') as file:
+                    file.write(description)
 
         for doc in self.images:
             file_name = f'{doc.metadata["n"]}__{doc.metadata["page"]}.png'
             path = str(self.content_dir / 'images' / file_name)
             doc.metadata['image'].save(path)
+            description = doc.metadata.get('description')
+            if description:
+                with open(str(Path(path).with_suffix('.txt')), 'w', encoding='utf-8') as file:
+                    file.write(description)
 
         logger.info(f'Содержимое сохранено в: {self.content_dir}')
