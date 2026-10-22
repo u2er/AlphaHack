@@ -14,6 +14,9 @@ services:
       HF_HOME: /data/hf
       # Экспорты мастера профиля: GUI кладёт сюда, воркер загружает.
       PROFILES_DIR: /profiles
+      # Ключ LLM можно не держать в .env: `LLM_API_KEY=… docker compose up`.
+      # Подстановка берёт его из окружения, иначе из .env.
+      LLM_API_KEY: ${LLM_API_KEY:-}
     ports:
       - "${PORT:-8000}:8000"
     volumes:

@@ -9,10 +9,13 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 import httpx
 
 log = logging.getLogger('alfa.gui.insights')
 FRAGMENTS = 2
+GRAPH_CACHE_SECONDS = 60
+CONNECTOR_ACTIONS = {'run': 'run', 'test': 'test', 'pause': 'pause', 'resume': 'resume', 'reset': 'state/reset'}
 MIN_SCORE = 0.3
 
 
@@ -29,37 +32,93 @@ class Insights:
         self._fragments: dict[str, list[dict]] = {}
         self._lock = threading.Lock()
 
-    def _get(self, path, **params):
+    def _call(self, method, path, params=None, body=None, timeout=20):
         if not self.api_key:
             raise InsightsError('API_KEY не задан: GUI не может обратиться к EventGraph')
         try:
-            with httpx.Client(base_url=self.base_url, timeout=20, transport=self.transport) as client:
-                response = client.get(path, params=params, headers={'X-Api-Key': self.api_key})
+            with httpx.Client(base_url=self.base_url, timeout=timeout, transport=self.transport) as client:
+                response = client.request(method, path, params=params, json=body, headers={'X-Api-Key': self.api_key})
         except httpx.HTTPError:
             raise InsightsError(f'EventGraph недоступен по адресу {self.base_url}') from None
         if response.status_code == 404:
-            raise KeyError('Профиль не найден в EventGraph')
-        if response.status_code != 200:
+            raise KeyError('Не найдено в EventGraph')
+        if response.status_code == 422:
+            detail = response.json().get('detail') if 'json' in response.headers.get('content-type', '') else ''
+            raise ValueError(detail if isinstance(detail, str) else 'EventGraph отклонил запрос')
+        if response.status_code not in (200, 201, 202):
             raise InsightsError(f'EventGraph ответил HTTP {response.status_code}')
         return response.json()
+
+    def _get(self, path, **params):
+        return self._call('GET', path, params=params)
+
+    # ── коннекторы ──────────────────────────────────────────────────────────
+    def connectors(self):
+        return [{k: c.get(k) for k in ('name', 'kind', 'description', 'interval_seconds', 'enabled', 'paused',
+                                       'next_run_at', 'last_run_at', 'last_status', 'last_error', 'items_count')}
+                for c in self._get('/connectors')]
+
+    def connector_action(self, name, action):
+        if action not in CONNECTOR_ACTIONS:
+            raise KeyError('Нет такого действия')
+        return self._call('POST', f'/connectors/{name}/{CONNECTOR_ACTIONS[action]}')
+
+    def connector_runs(self, name, limit=10):
+        return [{k: r.get(k) for k in ('id', 'kind', 'status', 'items_total', 'items_new', 'items_dup', 'error',
+                                       'created_at', 'finished_at', 'log', 'preview')}
+                for r in self._get(f'/connectors/{name}/runs', limit=limit)]
+
+    def set_sources(self, profile_id, sources):
+        return self._call('PUT', f'/profiles/{profile_id}/sources', body={'sources': list(sources)})
+
+    # ── граф ────────────────────────────────────────────────────────────────
+    def _graph_name(self):
+        if not getattr(self, '_graph', None):
+            self._graph = self._get('/health').get('graph') or 'news'
+        return self._graph
+
+    def graph(self):
+        """The whole graph without items, cached briefly: 8 thousand elements are a few megabytes."""
+        with self._lock:
+            cached = getattr(self, '_dump', None)
+            if cached and time.monotonic() - cached[0] < GRAPH_CACHE_SECONDS:
+                return cached[1]
+        dump = self._call('GET', f'/graphs/{self._graph_name()}', timeout=60)
+        out = {'graph': dump.get('graph'),
+               'nodes': [{'id': n['id'], 'name': n['name'], 'meta': n.get('meta') or {}} for n in dump.get('nodes', [])],
+               'edges': [{'id': e['id'], 'name': e['name'], 'source': e.get('source_id'), 'target': e.get('target_id')}
+                         for e in dump.get('edges', [])]}
+        with self._lock:
+            self._dump = (time.monotonic(), out)
+        return out
+
+    def graph_element(self, kind, element_id):
+        if kind not in ('nodes', 'edges'):
+            raise KeyError('kind — nodes или edges')
+        return self._get(f'/graphs/{self._graph_name()}/{kind}/{element_id}')
+
+    def graph_search(self, query):
+        found = self._call('POST', f'/graphs/{self._graph_name()}/search',
+                           body={'query': query, 'limit': 20, 'kinds': ['node']})
+        return [{'id': r['element']['id'], 'name': r['element']['name'], 'score': round(r.get('score', 0), 3),
+                 'type': (r['element'].get('meta') or r['element'].get('attrs') or {}).get('type')}
+                for r in found.get('results', []) if r.get('element')]
 
     def profiles(self):
         return [p for p in self._get('/profiles') if p.get('active')]
 
     def profile(self, profile_id):
-        """Name, confirmed topics with their bank sources, and the user's role."""
+        """Name, role, the main page and the table of contents of a paged profile."""
+        from profile.contract import load_profile, table_of_contents
         data = self._get(f'/profiles/{profile_id}')
-        payload = data.get('payload') or {}
-        evidence = payload.get('evidence') or {}
-        topics = []
-        for topic in (payload.get('monitoring_context') or {}).get('topics', []):
-            sources = [{'filename': evidence[s].get('filename'), 'page': evidence[s].get('page'),
-                        'date_hint': evidence[s].get('date_hint')} for s in topic.get('source_ids', []) if s in evidence]
-            topics.append({'title': topic.get('title'), 'rationale': topic.get('rationale'), 'sources': sources})
-        role = (payload.get('user_context') or {}).get('user_role', {}).get('value')
+        doc = load_profile(data.get('payload') or {})
         return {'id': data['id'], 'name': data['name'], 'company_id': data.get('company_id'),
-                'updated_at': data.get('updated_at'), 'topics': topics, 'user_role': role,
-                'summary': (payload.get('draft_overview') or {}).get('summary')}
+                'updated_at': data.get('updated_at'), 'user_role': doc.user_role,
+                'main': doc.pages[0].content, 'toc': table_of_contents(doc), 'news_sources': doc.news_sources,
+                'files': [f.model_dump() for f in doc.files]}
+
+    def page(self, profile_id, page_id, offset=0):
+        return self._get(f'/profiles/{profile_id}/pages/{page_id}', offset=max(0, offset), limit=20000)
 
     def _bank_fragments(self, item):
         """Closest library fragments to the event: the bank's own analytics, not AI text."""

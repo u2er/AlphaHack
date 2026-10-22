@@ -5,211 +5,211 @@ import tempfile
 import threading
 import time
 import unittest
+from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 from gui.controller import Controller
 from gui.server import create_server
 from profile.db.field_labels import FIELDS, VALUE_LABELS, ensure_field_labels
 from utils.llm import Completion
 
+FIXTURES = Path(__file__).resolve().parents[1]/'fixtures'/'profiles'
+
+
 class FakeStore:
-    def field_labels(self):
-        return {key:{'field_key':key,'label':label,'description':description,
-                     'section':section,'sort_order':i}
-                for i,(key,label,description,section) in enumerate(FIELDS)}
-    def field_value_labels(self):
-        result={}
-        for key,raw,label in VALUE_LABELS:
-            result.setdefault(key,{})[raw]=label
-        return result
-    def companies(self,query='',limit=20):
+    def field_labels(self): return {}
+    def field_value_labels(self): return {}
+    def companies(self, query='', limit=20):
         return [{'SYNTHETIC_U':'U_1','MAINOKVED_NAME':'Металлы','REGION':'Томская область'}] if query else []
-    def company(self,company_id):
-        if company_id!='U_1':raise ValueError('Unknown company')
-        return {'SYNTHETIC_U':'U_1','MAINOKVED_NAME':'Металлы','CITY':'Томск','REVENUE_COMPANY':'100000000'}
-    def signals(self,company_id):
-        return {'payments':[{'payer':'U_1','beneficiary':'U_2','amount':200,'count':2}],
-                'shared_person_companies':[]}
-    def search(self,query,limit=4):
+    def company(self, company_id):
+        if company_id != 'U_1': raise ValueError('Unknown company')
+        return {'SYNTHETIC_U':'U_1','MAINOKVED_NAME':'Металлы','CITY':'Томск'}
+    def signals(self, company_id):
+        return {'payments':[], 'shared_person_companies':[]}
+    def search(self, query, limit=4):
         return [{'id':'source:1','text':'Стоимость кредита зависит от ставки','filename':'bank.pdf',
-                 'page':1,'date_hint':'2026','date_warning':'Проверить дату','score':.8}]
+                 'page':1,'date_hint':'2026','score':.8}]
+
+
+def action(tool, **kw):
+    return {'tool':tool,'note':kw.get('note',''),'query':kw.get('query',''),'file_id':kw.get('file_id',''),
+            'page':kw.get('page',0),'question':kw.get('question'),'draft':kw.get('draft')}
+
 
 class FakeClient:
-    provider='test'
-    model='test'
+    """One scripted onboarding: library search, a free-text question, finish."""
     def __init__(self):
-        self.lock=threading.Lock()
-        self.responses=[
-            {'summary':'По данным набора — металлургия.','claims':[
-                {'kind':'fact','text':'Отрасль указана в наборе.','source_keys':['MAINOKVED_NAME']},
-                {'kind':'signal','text':'Платежи наблюдаются.','source_keys':['signals.payments']},
-                {'kind':'question','text':'Уточните рынки продаж.','source_keys':['MAINOKVED_NAME']}]},
-            {'scope':'facts','key':'CITY','value':'Томск','explanation':'Исправление города'},
-            {'tool':'search_library','query':'ставка','question':'','assessment':None},
-            {'tool':'ask_user','query':'','question':'Есть ли кредит?','assessment':None},
-            {'tool':'finish','query':'','question':'','assessment':{
-                'topics':[{'title':'Ставка','rationale':'Ответ пользователя о кредитах',
-                           'profile_fields':['sensitivity'],'source_ids':['source:1']}],
-                'limitations':['Требуется проверка']}}
-        ]
-    def complete_structured(self,system,payload,response_model):
-        with self.lock:
-            return Completion(json.dumps(self.responses.pop(0)),{})
-    def close(self):pass
+        self.responses = [
+            action('ask', question={'text':'Есть ли кредиты с плавающей ставкой?','kind':'text','options':[],'allow_other':False}),
+            action('finish', draft={'name':'Металл Сибирь','user_role':'Финансовый директор',
+                                    'main':'## Чем занимается\n'+'Сортовой прокат для стройки. '*10,
+                                    'main_sources':['form.activity'],
+                                    'pages':[{'id':'finance','title':'Финансы','summary':'Кредиты',
+                                              'content':'Кредит с плавающей ставкой','sources':['answer.1']}]})]
+    def complete_structured(self, system, payload, response_model):
+        return Completion(json.dumps(self.responses.pop(0)), {})
+    def close(self): pass
+
+
+def parse(path):
+    return {'kind':'Текст','pages':[{'page':1,'text':Path(path).read_text(encoding='utf-8'),'extraction':'text'}]}
+
+
+class Server:
+    def __init__(self, tmp, insights=None):
+        self.client = FakeClient()
+        self.published = []
+        controller = Controller(FakeStore(), lambda: self.client, Path(tmp), embedder=None, parse=parse)
+        controller.publish = lambda payload: self.published.append(payload) or Path(tmp)/'shared.json'
+        self.server = create_server(port=0, controller=controller, insights=insights)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.base = f'http://127.0.0.1:{self.server.server_port}'
+    def __enter__(self):
+        self.thread.start(); return self
+    def __exit__(self, *exc):
+        self.server.shutdown(); self.server.server_close()
+    def get(self, path):
+        with urlopen(self.base+path) as response:
+            return json.load(response)
+    def post(self, path, body=None, data=None, headers=None):
+        request = Request(self.base+path, data=data if data is not None else json.dumps(body or {}).encode(),
+                          headers=headers or {'Content-Type':'application/json'}, method='POST')
+        with urlopen(request) as response:
+            return json.load(response)
+    def wait(self, sid, predicate, timeout=5):
+        deadline = time.monotonic()+timeout
+        while time.monotonic() < deadline:
+            view = self.get(f'/api/onboarding/{sid}')
+            if predicate(view): return view
+            time.sleep(.02)
+        raise AssertionError(f'timeout, last status {view["status"]}')
+
 
 class GuiTests(unittest.TestCase):
-    def test_controller_full_flow_and_trace(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            client=FakeClient()
-            controller=Controller(FakeStore(),lambda:client,Path(tmp))
-            session=controller.create(company_id='U_1')
-            self.assertEqual(session.view()['field_labels']['MAINOKVED_NAME']['label'],'Основной вид деятельности')
-            self.assertEqual(session.view()['field_value_labels']['CL_TYPE']['CLIENT'],'Клиент банка')
-            self.assertEqual(session.view()['profile']['source_facts']['CITY']['value'],'Томск')
-            deadline=time.monotonic()+5
-            while session.view()['status']=='overview_running' and time.monotonic()<deadline:
-                time.sleep(.01)
-            self.assertTrue(session.view()['profile']['overview']['claims'])
-            session.propose_edit('Город регистрации Томск')
-            self.assertEqual(session.view()['proposal']['key'],'CITY')
-            session.decide_edit(False)
-            self.assertEqual(session.view()['profile']['facts']['CITY']['source'],'appendix1:df_Uid_data_hack.csv')
-            from profile.service import QUESTIONS
-            for key in QUESTIONS:
-                session.edit_key('answers',key,'Стоимость кредита' if key=='sensitivity' else 'не знаю')
-            session.confirm_profile()
-            self.assertTrue(session.view()['profile']['profile_confirmed'])
-            deadline=time.monotonic()+5
-            while session.view()['status']=='agent_running' and time.monotonic()<deadline:
-                time.sleep(.01)
-            self.assertEqual(session.view()['status'],'awaiting_answer')
-            self.assertEqual(session.view()['pending_question'],'Есть ли кредит?')
-            session.answer_agent('Да, есть кредит')
-            while session.view()['status'] in {'agent_running','awaiting_answer'} and time.monotonic()<deadline:
-                time.sleep(.01)
-            self.assertEqual(session.view()['status'],'assessment_ready')
-            session.confirm_assessment()
-            session.sites(['example.com'])
-            exported=session.export()
-            self.assertEqual(exported['profile']['monitoring_context']['topics'][0]['title'],'Ставка')
-            self.assertEqual(exported['profile']['source_facts']['CITY']['value'],'Томск')
-            kinds={e['event'] for e in session.trace_events(200)}
-            self.assertTrue({'llm_request','llm_response','db_result','agent_question','agent_answer','profile_exported'}<=kinds)
-            requests=[e for e in session.trace_events(200) if e['event']=='llm_request']
-            self.assertTrue(all('field_metadata' in e['payload'] for e in requests))
-            self.assertTrue(all('REVENUE_COMPANY' in e['payload']['field_metadata'] for e in requests))
-            self.assertEqual(Path(exported['trace_path']).stat().st_mode & 0o777,0o600)
-            controller.close()
+    def test_onboarding_chat_over_http(self):
+        with tempfile.TemporaryDirectory() as tmp, Server(tmp) as s:
+            page = urlopen(s.base+'/').read().decode()
+            self.assertIn('Добавить компанию', page)
+            for gone in ('Счета', 'Платежи', 'Зарплатный проект', 'Кредиты'):
+                self.assertNotIn(gone, page)
+            self.assertEqual(s.get('/api/companies?q=met')['companies'][0]['id'], 'U_1')
+            view = s.post('/api/onboarding')
+            sid = view['id']
+            self.assertEqual(view['messages'][-1]['kind'], 'form')
+            s.post(f'/api/onboarding/{sid}/files', data='Годовой отчёт: прокат и арматура'.encode(),
+                   headers={'X-Filename': quote('Отчёт 2025.txt')})
+            s.wait(sid, lambda v: v['files'][0]['status'] == 'ready')
+            with self.assertRaises(HTTPError) as error:
+                s.post(f'/api/onboarding/{sid}/form', {'form':{'activity':'Прокат'}})
+            self.assertEqual(error.exception.code, 400)
+            s.post(f'/api/onboarding/{sid}/form', {'form':{'company_name':'Металл Сибирь','activity':'Прокат',
+                                                            'role':'Финансовый директор','sensitivity':['Ключевая ставка и кредиты']}})
+            view = s.wait(sid, lambda v: v['question'] is not None)
+            self.assertEqual(view['question']['kind'], 'text')
+            s.post(f'/api/onboarding/{sid}/answer', {'value':'Да, 70% портфеля'})
+            view = s.wait(sid, lambda v: v['status'] == 'review')
+            pages = [p['id'] for p in view['profile']['pages']]
+            self.assertEqual(pages, ['main','finance','file-1','dialog'])
+            view = s.post(f'/api/onboarding/{sid}/pages/finance', {'content':'Кредит 2 млрд, плавающая ставка'})
+            self.assertEqual(view['profile']['pages'][1]['content'], 'Кредит 2 млрд, плавающая ставка')
+            result = s.post(f'/api/onboarding/{sid}/confirm')
+            self.assertTrue(result['published'])
+            self.assertEqual(s.published[0]['name'], 'Металл Сибирь')
+            trace = (Path(tmp)/sid/'trace.jsonl').read_text(encoding='utf-8')
+            self.assertIn('profile_confirmed', trace)
 
-    def test_manual_empty_fields_and_skipped_questions(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            client=FakeClient()
-            client.responses[0]={'summary':'Указан тип организации.','claims':[
-                {'kind':'fact','text':'Тип организации указан пользователем.','source_keys':['ORG_TYPE']},
-                {'kind':'question','text':'Уточните деятельность.','source_keys':['ORG_TYPE']},
-                {'kind':'question','text':'Уточните географию.','source_keys':['ORG_TYPE']}]}
-            controller=Controller(FakeStore(),lambda:client,Path(tmp))
-            session=controller.create(manual=True)
-            self.assertEqual(session.view()['profile']['facts'],{})
-            session.edit_key('answers','geography','')
-            self.assertEqual(session.view()['status'],'selected')
-            session.submit_manual({'ORG_TYPE':'КОММ_ОРГ','CITY':'','name':''})
-            deadline=time.monotonic()+5
-            while session.view()['status']=='overview_running' and time.monotonic()<deadline:
-                time.sleep(.01)
-            self.assertEqual(session.view()['status'],'draft_ready')
-            self.assertEqual(session.view()['profile']['facts']['ORG_TYPE']['value'],'КОММ_ОРГ')
-            session.edit_key('answers','activity','Оптовая торговля')
-            session.edit_key('answers','activity','')
-            client.responses=[
-                {'tool':'search_library','query':'торговля','question':'','assessment':None},
-                {'tool':'finish','query':'','question':'','assessment':{
-                    'topics':[],'limitations':['Недостаточно подтверждённых данных']}}]
-            session.confirm_profile()
-            self.assertEqual(session.view()['profile']['answers'],{})
-            deadline=time.monotonic()+5
-            while session.view()['status']=='agent_running' and time.monotonic()<deadline:
-                time.sleep(.01)
-            self.assertEqual(session.view()['status'],'assessment_ready')
-            controller.close()
-
-    def test_empty_manual_profile_can_generate_neutral_draft(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            controller=Controller(FakeStore(),lambda:None,Path(tmp))
-            session=controller.create(manual=True)
-            session.submit_manual({})
-            deadline=time.monotonic()+5
-            while session.view()['status']=='overview_running' and time.monotonic()<deadline:
-                time.sleep(.01)
-            self.assertEqual(session.view()['status'],'draft_ready')
-            self.assertEqual(session.view()['profile']['overview']['claims'],[])
-            controller.close()
-
-    def test_http_serves_app_and_selects_company(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            controller=Controller(FakeStore(),FakeClient,Path(tmp))
-            server=create_server(port=0,controller=controller)
-            thread=threading.Thread(target=server.serve_forever,daemon=True)
-            thread.start()
-            base=f'http://127.0.0.1:{server.server_port}'
-            try:
-                with urlopen(base+'/') as response:
-                    page=response.read()
-                    self.assertIn(b'<title>',page)
-                    self.assertNotIn(b'id="agentButton"',page)
-                with urlopen(base+'/api/companies?q=met') as response:
-                    self.assertEqual(json.load(response)['companies'][0]['id'],'U_1')
-                request=Request(base+'/api/sessions',data=b'{"company_id":"U_1"}',
-                                headers={'Content-Type':'application/json'},method='POST')
-                with urlopen(request) as response:
-                    session=json.load(response)
-                self.assertEqual(session['profile']['company_id'],'U_1')
-                self.assertEqual(session['field_labels']['CITY']['label'],'Город регистрации')
-                self.assertTrue(Path(session['trace_path']).is_file())
-            finally:
-                server.shutdown();server.server_close();controller.close();thread.join(timeout=2)
-
-    def test_insights_proxy_keeps_the_key_server_side_and_adds_bank_fragments(self):
+    def test_insights_proxy_keeps_the_key_server_side_and_reads_pages(self):
         import httpx
         from gui.insights import Insights
-        seen=[]
+        payload = json.loads((FIXTURES/'vectorfood-v2.json').read_text(encoding='utf-8'))
+        seen = []
         def handler(request):
-            seen.append((request.url.path,request.headers.get('X-Api-Key')))
-            if request.url.path=='/profiles':
-                return httpx.Response(200,json=[{'id':'p1','name':'Клиент','active':True},{'id':'p0','name':'Старый','active':False}])
-            if request.url.path=='/profiles/p1':
-                return httpx.Response(200,json={'id':'p1','name':'Клиент','payload':{
-                    'user_context':{'user_role':{'value':'Финансовый директор'}},
-                    'evidence':{'source:1':{'filename':'bank.pdf','page':1,'date_hint':'2026'}},
-                    'monitoring_context':{'topics':[{'title':'Ставка','rationale':'Кредит','source_ids':['source:1']}]}}})
-            if request.url.path=='/profiles/p1/feed':
-                return httpx.Response(200,json=[{'uid':'01A','title':'ЦБ сохранил ставку','analysis':{'importance':4,'impact':'Дорогой кредит'}}])
-            return httpx.Response(404,json={})
-        insights=Insights(store=FakeStore(),base_url='http://eventgraph',api_key='secret',transport=httpx.MockTransport(handler))
-        self.assertEqual([p['id'] for p in insights.profiles()],['p1'])
-        profile=insights.profile('p1')
-        self.assertEqual((profile['user_role'],profile['topics'][0]['sources'][0]['filename']),('Финансовый директор','bank.pdf'))
-        item=insights.feed('p1',3)[0]
-        self.assertEqual(item['bank'][0]['filename'],'bank.pdf')
-        self.assertIn(('/profiles/p1/feed','secret'),seen)
-        with self.assertRaises(KeyError):insights.profile('missing')
-        server=create_server(port=0,controller=Controller(FakeStore(),FakeClient,tempfile.mkdtemp()),insights=insights)
-        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-        try:
-            base=f'http://127.0.0.1:{server.server_port}'
-            feed=json.loads(urlopen(base+'/api/insights/profiles/p1/feed?min_importance=3').read())
-            self.assertEqual(feed['items'][0]['analysis']['importance'],4)
-            page=urlopen(base+'/').read().decode()
-            self.assertIn('Бизнес‑аналитика',page)
-            self.assertNotIn('secret',page+urlopen(base+'/bank.js').read().decode())
-        finally:
-            server.shutdown();server.server_close()
+            seen.append((request.url.path, request.headers.get('X-Api-Key')))
+            if request.url.path == '/profiles':
+                return httpx.Response(200, json=[{'id':'p1','name':'Клиент','active':True},{'id':'p0','name':'Старый','active':False}])
+            if request.url.path == '/profiles/p1':
+                return httpx.Response(200, json={'id':'p1','name':'ВекторФуд','payload':payload})
+            if request.url.path == '/profiles/p1/pages/finance':
+                return httpx.Response(200, json={'ok':True,'id':'finance','content':'Кредитный портфель 32 млрд'})
+            if request.url.path == '/profiles/p1/feed':
+                return httpx.Response(200, json=[{'uid':'01A','title':'ЦБ сохранил ставку','analysis':{'importance':4,'impact':'Дорогой кредит'}}])
+            return httpx.Response(404, json={})
+        insights = Insights(store=FakeStore(), base_url='http://eventgraph', api_key='secret', transport=httpx.MockTransport(handler))
+        self.assertEqual([p['id'] for p in insights.profiles()], ['p1'])
+        profile = insights.profile('p1')
+        self.assertIn('## Финансирование', profile['main'])
+        self.assertEqual(profile['toc'][0]['id'], 'products')
+        self.assertNotIn('topics', profile)
+        self.assertIn('32 млрд', insights.page('p1', 'finance')['content'])
+        with tempfile.TemporaryDirectory() as tmp, Server(tmp, insights) as s:
+            item = s.get('/api/insights/profiles/p1/feed?min_importance=3')['items'][0]
+            self.assertEqual(item['bank'][0]['filename'], 'bank.pdf')
+            self.assertEqual(s.get('/api/insights/profiles/p1/pages/finance')['id'], 'finance')
+            scripts = urlopen(s.base+'/bank.js').read().decode()+urlopen(s.base+'/onboarding.js').read().decode()
+            self.assertNotIn('secret', scripts)
+        self.assertIn(('/profiles/p1/feed','secret'), seen)
+
+    def test_connectors_sources_and_graph_go_through_the_proxy(self):
+        import httpx
+        from gui.insights import Insights
+        calls = []
+        connectors = [{'name':'lenta_economics','kind':'website','description':'Lenta.ru — экономика','enabled':True,
+                       'paused':False,'items_count':3,'config':{'secret':'x'}},
+                      {'name':'alfa_investor_site','kind':'website','description':'выключен','enabled':False,'paused':False,'items_count':0}]
+        def handler(request):
+            calls.append((request.method, request.url.path, request.content.decode() if request.content else ''))
+            path = request.url.path
+            if path == '/connectors': return httpx.Response(200, json=connectors)
+            if path == '/connectors/lenta_economics/pause': return httpx.Response(200, json=connectors[0] | {'paused': True})
+            if path == '/connectors/lenta_economics/state/reset': return httpx.Response(200, json=connectors[0])
+            if path == '/profiles/p1/sources' and request.method == 'PUT':
+                return httpx.Response(200, json={'id':'p1','news_sources':json.loads(request.content)['sources']})
+            if path == '/health': return httpx.Response(200, json={'graph':'news'})
+            if path == '/graphs/news':
+                return httpx.Response(200, json={'graph':'news','nodes':[{'id':'a','name':'ЦБ','meta':{'type':'org'},'item_count':0}],
+                                                 'edges':[{'id':'e','name':'about','source_id':'a','target_id':'a'}]})
+            return httpx.Response(404, json={})
+        insights = Insights(store=FakeStore(), base_url='http://eventgraph', api_key='secret', transport=httpx.MockTransport(handler))
+        with tempfile.TemporaryDirectory() as tmp, Server(tmp, insights) as s:
+            listed = s.get('/api/insights/connectors')['connectors']
+            self.assertEqual([c['name'] for c in listed], ['lenta_economics','alfa_investor_site'])
+            self.assertNotIn('config', listed[0])  # connector settings stay on the server
+            self.assertTrue(s.post('/api/insights/connectors/lenta_economics/pause')['paused'])
+            s.post('/api/insights/connectors/lenta_economics/reset')
+            with self.assertRaises(HTTPError) as error:
+                s.post('/api/insights/connectors/lenta_economics/delete')
+            self.assertEqual(error.exception.code, 404)
+            saved = s.post('/api/insights/profiles/p1/sources', {'sources':['lenta_economics']})
+            self.assertEqual(saved['news_sources'], ['lenta_economics'])
+            graph = s.get('/api/insights/graph')
+            self.assertEqual((graph['nodes'][0]['name'], graph['edges'][0]['source']), ('ЦБ', 'a'))
+            # onboarding: sources after confirmation, only enabled connectors
+            sid = s.post('/api/onboarding')['id']
+            s.post(f'/api/onboarding/{sid}/form', {'form':{'activity':'Прокат','role':'Финансовый директор'}})
+            s.wait(sid, lambda v: v['question'] is not None)
+            s.post(f'/api/onboarding/{sid}/answer', {'value':'Да'})
+            s.wait(sid, lambda v: v['status'] == 'review')
+            s.post(f'/api/onboarding/{sid}/confirm')
+            with self.assertRaises(HTTPError):
+                s.post(f'/api/onboarding/{sid}/sources', {'sources':['alfa_investor_site']})
+            view = s.post(f'/api/onboarding/{sid}/sources', {'sources':['lenta_economics']})
+            self.assertEqual(view['profile']['news_sources'], ['lenta_economics'])
+            self.assertEqual(s.published[-1]['news_sources'], ['lenta_economics'])
+        self.assertIn(('POST', '/connectors/lenta_economics/state/reset', ''), calls)
 
     def test_insights_without_eventgraph_report_a_readable_error(self):
         from gui.insights import Insights, InsightsError
-        with self.assertRaisesRegex(InsightsError,'API_KEY'):
+        with self.assertRaisesRegex(InsightsError, 'API_KEY'):
             Insights(api_key='').profiles()
-        with self.assertRaisesRegex(InsightsError,'недоступен'):
-            Insights(base_url='http://127.0.0.1:9',api_key='k').profiles()
+        with self.assertRaisesRegex(InsightsError, 'недоступен'):
+            Insights(base_url='http://127.0.0.1:9', api_key='k').profiles()
+
+    def test_library_not_ready_is_a_readable_error(self):
+        class Empty(FakeStore):
+            def field_labels(self): raise RuntimeError('relation "profile_data.field_labels" does not exist')
+        controller = Controller(Empty(), FakeClient, tempfile.mkdtemp(), embedder=None)
+        with self.assertRaisesRegex(ValueError, 'profile-prepare'):
+            controller.companies('U_1')
 
     def test_field_catalog_covers_csv_and_updates_without_changing_data(self):
         root=Path(__file__).resolve().parents[2]

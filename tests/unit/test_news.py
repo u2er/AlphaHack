@@ -318,3 +318,25 @@ async def test_a_new_client_is_assessed_without_repeating_the_others(world, monk
 
     assert world["agents"] == ["analyst", "news"]
     assert set(world["stored"]["analysis"]["profiles"]) == {"default", "food"}
+
+
+async def test_a_client_gets_records_only_from_the_sources_it_chose(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["clients"] = [profiles.Active("steel", "Сталь", "Профиль", sources=("lenta_economics",)),
+                        profiles.Active("food", "Еда", "Профиль", sources=("alfa_analytics",))]
+    world["replies"] += [assessed(importance=3), done()]
+
+    await news.process(world["item"], "alfa_analytics", GraphSettings())
+
+    assert [v.get("company_profile") for v in world["variables"]][:1] == ["Профиль"]
+    assert set(world["stored"]["analysis"]["profiles"]) == {"food"}
+
+
+async def test_a_record_nobody_subscribed_to_is_closed_without_agents(world, monkeypatch):
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    world["clients"] = [profiles.Active("steel", "Сталь", "Профиль", sources=("lenta_economics",))]
+
+    result = await news.process(world["item"], "alfa_investments", GraphSettings())
+
+    assert world["agents"] == [] and result["verdict"] == "below_threshold"
+    assert world["item"].outcome == {"reason": "ни один клиент не выбрал этот источник"}

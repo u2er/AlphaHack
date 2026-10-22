@@ -44,6 +44,7 @@ def _out(source: Source, connector: Connector | None, items: int) -> dict[str, A
         "config": source.config,
         "interval_seconds": source.interval_seconds,
         "enabled": source.enabled,
+        "paused": bool(connector.paused) if connector else False,
         "images": source.images,
         "id": connector.id if connector else None,
         "state": connector.state if connector else {},
@@ -112,6 +113,27 @@ async def test_connector(name: str, session: AsyncSession = Depends(get_session)
     сдвига курсора. Итог — по `GET /connector-runs/{id}`."""
     _, connector = await _get(session, name)
     return await _queue(session, connector, "test")
+
+
+@router.post("/connectors/{name}/pause")
+async def pause_connector(name: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Приостановить расписание; ручной запуск остаётся."""
+    return await _set_paused(session, name, True)
+
+
+@router.post("/connectors/{name}/resume")
+async def resume_connector(name: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    return await _set_paused(session, name, False)
+
+
+async def _set_paused(session: AsyncSession, name: str, paused: bool) -> dict[str, Any]:
+    source, connector = await _get(session, name)
+    connector.paused = paused
+    if not paused:
+        connector.next_run_at = None  # снятая пауза — запуск на ближайшем тике
+    await session.commit()
+    items = await session.scalar(select(func.count()).select_from(Item).where(Item.connector_id == connector.id))
+    return _out(source, connector, items or 0)
 
 
 @router.post("/connectors/{name}/state/reset")

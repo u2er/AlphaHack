@@ -79,7 +79,7 @@ curl -s localhost:8000/health | jq
 ```
 
 Поднимаются `eventgraph` (API), `eventgraph-worker`, `eventgraph-profile-gui`
-(интерфейс «Альфа-Бизнес»: бизнес-аналитика и мастер профиля,
+(интерфейс «Альфа-Бизнес»: бизнес-аналитика, профиль и чат добавления компании,
 http://127.0.0.1:8765, см. `gui/README.md`) и `eventgraph-db` (Postgres с
 pgvector). Без `EMB_BASE_URL` эмбеддер локальный: модель (~1 ГБ) качается в
 том `data` при первой записи.
@@ -93,33 +93,46 @@ docker compose run --rm profile-prepare            # --replace — пересо�
 
 ## Источники
 
-Источник — строка в `SOURCES` в `eventgraph/sources.py`:
+Встроенные коннекторы (`eventgraph/sources.py`):
 
-```python
-Source(
-    name="tsunews",                      # имя: латиница, цифры, _; по нему хранится курсор
-    collect=telegram_channel.collect,    # сборщик из connectors/kinds/
-    config={"channel": "tsunews", "backfill": 10},
-    interval_seconds=3600,               # None — только вручную
-    images=True,                         # брать ли картинки записей
-),
-```
+| имя | что | вид |
+|---|---|---|
+| `lenta_economics` | Lenta.ru — новости экономики (RSS рубрики), раз в 30 минут | `website` |
+| `alfa_investments` | Альфа-Инвестиции — аналитика и идеи, Telegram-канал @alfa_investments | `telegram_channel` |
+| `alfa_analytics` | Аналитика Альфа-Банка — PDF-отчёты приложения 2 и каталога `./pdfs` (`/data/pdfs`); запись — страница отчёта, дата — с первой страницы; разбор docling с общим кэшем | `pdf` |
+| `alfa_investor_site` | Альфа-Инвестор на alfabank.ru — **выключен**: сайт закрыт защитой от ботов (JS-проверка), коннектор получает 403; обходить её мы не стали, те же материалы идут через канал | `website` |
 
-Сборщики: `telegram_channel` — публичный канал через `t.me/s/<канал>`,
-`website` — раздел новостей сайта (RSS, затем sitemap, затем листинг);
-настройки каждого описаны в начале его модуля. Новый вид источника — модуль
-в `connectors/kinds/` с `async def collect(ctx)`, его библиотеки — в
-`requirements.txt`. Источники применяются при перезапуске; убранный из списка
-источник больше не запускается, а его записи остаются.
+Клиент выбирает источники после добавления компании (профиль: `news_sources`,
+`PUT /profiles/{id}/sources`): запись оценивается только для подписанных на её
+источник, а запись источника, на который не подписан никто, закрывается без
+агентов. Во вкладке «Бизнес‑аналитика» → «Источники» коннекторы запускаются,
+пробуются, ставятся на паузу (`POST /connectors/{name}/pause|resume`), им
+сбрасывается курсор и видна история запусков.
+
+Новый источник — строка в `SOURCES`; сборщики: `telegram_channel` — публичный
+канал через `t.me/s/<канал>`, `website` — раздел сайта (RSS, затем sitemap,
+затем листинг; robots.txt соблюдается), `pdf` — каталог или ссылки на PDF.
+Настройки каждого описаны в начале его модуля. Источники применяются при
+перезапуске; убранный из списка источник больше не запускается, а его записи
+остаются.
 
 ```bash
 H='X-Api-Key: …'
-curl -s -H "$H" localhost:8000/connectors | jq '.[] | {name, last_status, items_count}'
-curl -s -X POST -H "$H" localhost:8000/connectors/tsunews/test       # проба: что вернул бы, без записи
-curl -s -X POST -H "$H" localhost:8000/connectors/tsunews/run        # собрать сейчас
-curl -s -H "$H" localhost:8000/graph/status | jq '{queue, working, paused_until}'  # как идёт разбор
-curl -s -H "$H" localhost:8000/graph/processed | jq '.[0]'                         # последняя разобранная запись
+curl -s -H "$H" localhost:8000/connectors | jq '.[] | {name, enabled, paused, last_status, items_count}'
+curl -s -X POST -H "$H" localhost:8000/connectors/lenta_economics/test   # проба: что вернул бы, без записи
+curl -s -X POST -H "$H" localhost:8000/connectors/lenta_economics/run    # собрать сейчас
+curl -s -H "$H" localhost:8000/graph/status | jq '{queue, working, paused_until}'
 ```
+
+## Базовый граф
+
+Пустой граф воркер наполняет снимком новостного графа на 21.10.2026
+(`eventgraph/seed/news-graph.json.gz`: 2270 узлов — события, организации,
+люди, места — и 6265 связей), чтобы аналитик с первого дня сверял записи с
+прошлыми событиями, а вкладка «Граф событий» не была пустой. Загрузка идёт в
+фоне пачками (векторы считаются минутами). `GRAPH_SEED=off` — не загружать,
+путь — свой снимок (выгрузка `GET /graphs/{graph}`); вручную и поверх
+непустого графа — `python -m eventgraph.seed --force`.
 
 ## Агенты
 
@@ -149,27 +162,37 @@ curl -s -H "$H" localhost:8000/graph/processed | jq '.[0]'                      
 
 ## Профили клиентов
 
-Профиль — подтверждённый экспорт мастера профиля (`profile/`, `gui/`):
-JSON `schema_version=1`, контракт — `profile/contract.py` (`ProfileExport`).
-Пример — `tests/fixtures/profiles/vectorfood.json`. Попадает в EventGraph
-двумя путями:
+Профиль — страничный документ (`profile/contract.py`, `ProfileDocument`,
+`schema_version=2`). Его собирает чат «Добавить компанию» (`profile/onboarding.py`,
+интерфейс — `gui/`): анкета, документы компании, вопросы агента, проверка и
+подтверждение пользователем. Экспорт мастера CLI (`schema_version=1`) при
+загрузке превращается в страницы. Примеры — `tests/fixtures/profiles/`.
 
-- GUI и CLI мастера кладут экспорт в `PROFILES_DIR` (в compose — общий том
-  `/profiles`); воркер загружает новые и изменённые файлы перед разбором;
-- `PUT /profiles` с тем же JSON.
+- Страница `main` («Основное», до 4000 знаков) — главное для оценки новостей.
+  Аналитик видит её всегда, вместе с темами наблюдения и **оглавлением**
+  остальных страниц.
+- Остальные страницы — аналитические (продукты, контрагенты, финансы, риски…),
+  полный текст каждого приложенного файла (`file-N`), поля набора банка
+  (`dataset`) и анкета с ответами (`dialog`). Их фрагменты лежат в
+  `profile_chunks` с вектором и полнотекстовым индексом (`tsvector`, русская
+  морфология), и аналитик читает их инструментами:
+  - `profile_search(query, mode)` — `keyword` (слова, названия, числа),
+    `vector` (по смыслу) или `hybrid` (оба, слитые по рангам — RRF);
+  - `profile_page(page_id, offset)` — страница окнами по 6000 знаков.
 
-Аналитик видит профиль текстом `render_for_prompt` (ответы пользователя,
-поля карточки с оговорками, связи без имён контрагентов, подтверждённые темы
-и ограничения) вместо `{{company_profile}}` в `prompts/analyst.md`; текст
-хранится в `company_profiles.prompt` и подставляется в ран
-(`agent_runs.variables`). Пока не загружено ни одного профиля, работает один
-профиль `default` из `COMPANY_PROFILE` (пусто — заготовка). Лента клиента —
-`GET /profiles/{id}/feed`: записи с его оценкой не ниже `min_importance`,
-важные первыми.
+В EventGraph профиль попадает двумя путями: чат и мастер кладут экспорт в
+`PROFILES_DIR` (в compose — общий том `/profiles`, воркер загружает новые и
+изменённые файлы перед разбором) или `PUT /profiles`. Текст для промпта
+(`render_for_prompt`) хранится в `company_profiles.prompt` и подставляется в
+ран (`agent_runs.variables`, там же `profile_id` для инструментов). Пока не
+загружено ни одного профиля, работает один профиль `default` из
+`COMPANY_PROFILE` (без страниц). Лента клиента — `GET /profiles/{id}/feed`.
 
 ```bash
 curl -s -X PUT -H "$H" -H 'Content-Type: application/json' \
-  --data @tests/fixtures/profiles/vectorfood.json localhost:8000/profiles | jq
+  --data @tests/fixtures/profiles/vectorfood-v2.json localhost:8000/profiles | jq
+curl -s -G -H "$H" --data-urlencode 'q=рефинансирование кредитов' \
+  localhost:8000/profiles/demo-vectorfood/search | jq '.results[] | {page_id, text}'
 curl -s -H "$H" 'localhost:8000/profiles/demo-vectorfood/feed?min_importance=3' | jq '.[] | {title, analysis}'
 ```
 
@@ -195,8 +218,11 @@ curl -s -H "$H" 'localhost:8000/profiles/demo-vectorfood/feed?min_importance=3' 
 | `POST` | `/graphs/{graph}/search` · `/graphs/{graph}/neighbors` | поиск по смыслу, окрестность |
 | `GET` | `/graphs/{graph}/period?since=&until=` | события периода и кто был в центре |
 | `GET` `POST` | `/agents` · `/agent-runs[/{id}]` · `/agent-runs/{id}/stop` | агенты и их раны |
+| `POST` | `/connectors/{name}/pause` · `/connectors/{name}/resume` | пауза расписания коннектора (ручной запуск остаётся) |
+| `PUT` | `/profiles/{id}/sources` | источники клиента; пусто — все |
 | `GET` `PUT` | `/profiles` | профили клиентов; PUT — экспорт мастера профиля (новая версия по `profile_id`) |
-| `GET` `DELETE` | `/profiles/{id}` | профиль с текстом для аналитика; DELETE — снять с оценки (лента остаётся) |
+| `GET` `DELETE` | `/profiles/{id}` | профиль: страницы, оглавление, текст для аналитика; DELETE — снять с оценки (лента остаётся) |
+| `GET` | `/profiles/{id}/pages/{page_id}?offset=` · `/profiles/{id}/search?q=&mode=` | страница профиля окнами; поиск по страницам (hybrid · vector · keyword) — то же, что инструменты аналитика |
 | `GET` | `/profiles/{id}/feed?min_importance=` | лента клиента по его оценкам; `default` — профиль из `COMPANY_PROFILE` |
 
 В граф через API не пишут: пишут только агенты, в воркере, одна запись за

@@ -35,6 +35,8 @@ class ToolContext:
     graph: str
     # Картинки рана: имя, под которым их видит агент, → путь от каталога данных.
     attachments: dict[str, str] = field(default_factory=dict)
+    # Профиль клиента рана (аналитик): его страницы читают profile_page / profile_search.
+    profile_id: str | None = None
 
 
 # Каждый ответ инструмента остаётся в разговоре и отправляется заново с каждым
@@ -212,6 +214,13 @@ def system_text(ctx: ToolContext) -> str:
     if ctx.attachments:
         text += ("\n\n`view_image(name)` shows a picture attached to this run. Each picture can be viewed once "
                  "per run and is visible only in that step.")
+    if ctx.profile_id:
+        text += ("\n\n## Company profile tools\nYou always see the profile's main page and the table of contents "
+                 "of its other pages (company documents, dataset fields, analysis, the onboarding dialog). "
+                 "`profile_search(query, mode)` finds fragments of those pages — `keyword` for exact names, numbers "
+                 "and terms, `vector` for meaning, `hybrid` (default) for both; `profile_page(page_id, offset)` "
+                 "reads a page. Look things up there before saying the profile does not mention them, and cite "
+                 "the page you used.")
     return text
 
 
@@ -223,7 +232,58 @@ def build_tools(ctx: ToolContext) -> list[Tool]:
         tools += _upkeep_tools(ctx)
     if ctx.attachments:
         tools += _image_tools(ctx)
+    if ctx.profile_id:
+        tools += _profile_tools(ctx)
     return tools
+
+
+# ── профиль клиента ──────────────────────────────────────────────────────────
+
+
+def _profile_tools(ctx: ToolContext) -> list[Tool]:
+    from eventgraph import profiles  # профили импортируют модели и эмбеддер — не на уровне модуля
+
+    profile_id = str(ctx.profile_id)
+
+    async def profile_page(page_id, offset=0):
+        try:
+            return await profiles.page(profile_id, str(page_id or ""), _int(offset, 0, low=0, high=10 ** 7))
+        except Exception as exc:  # noqa: BLE001
+            return _failed(exc)
+
+    async def profile_search(query, mode="hybrid", limit=6, pages=None):
+        try:
+            return await profiles.search(profile_id, str(query or ""), str(mode or "hybrid"),
+                                         _int(limit, 6, high=20), as_list(pages) or None)
+        except Exception as exc:  # noqa: BLE001
+            return _failed(exc)
+
+    return [
+        Tool("profile_page", (
+            "Read a page of the client's profile by its id from the table of contents. Long pages come in "
+            "windows: pass `next_offset` from the answer to read on."
+        ), {
+            "type": "object",
+            "properties": {
+                "page_id": {"type": "string", "description": "Page id, e.g. products or file-1"},
+                "offset": {"type": "integer", "description": "Character offset, 0 by default"},
+            },
+            "required": ["page_id"],
+        }, profile_page),
+        Tool("profile_search", (
+            "Search the client's profile pages (not the main page — you already see it). mode: keyword — "
+            "exact words, names, numbers (Russian morphology); vector — by meaning; hybrid — both, merged."
+        ), {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "mode": {"type": "string", "enum": ["hybrid", "vector", "keyword"]},
+                "limit": {"type": "integer", "description": "Fragments to return, 6 by default"},
+                "pages": {"type": "array", "items": {"type": "string"}, "description": "Only these page ids"},
+            },
+            "required": ["query"],
+        }, profile_search),
+    ]
 
 
 # ── чтение ───────────────────────────────────────────────────────────────────

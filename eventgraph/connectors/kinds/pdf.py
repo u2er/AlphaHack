@@ -3,6 +3,12 @@
 # Настройки (`config` источника в sources.py, приходят в ctx.config):
 #   mode             — откуда брать: "dir" (по умолчанию) | "url";
 #   path             — каталог с PDF-файлами (mode "dir"); читаются *.pdf;
+#   paths            — ещё каталоги (список); отсутствующие пропускаются;
+#   split            — "document" (по умолчанию): файл — одна запись; "page":
+#                      запись на страницу — отчёт с десятком тезисов не режется
+#                      до первых NEWS_ITEM_CHARS символов;
+#   date_from_text   — published по первой дате на первой странице (или в имени
+#                      файла), как у библиотеки профиля (parser/pdf.py), а не по mtime;
 #   urls             — прямые ссылки на PDF-файлы (mode "url"): список или строка;
 #   max_files_per_run — сколько новых файлов разобрать за запуск (3);
 #   max_images       — не больше стольких картинок на запись (3);
@@ -59,8 +65,14 @@ def options(config: dict[str, Any]) -> dict[str, Any]:
     urls = [str(u).strip() for u in urls if str(u).strip()]
 
     path = str(config.get("path") or "").strip()
-    if mode == "dir" and not path:
+    extra = config.get("paths") or []
+    paths = [path] + [str(p).strip() for p in ([extra] if isinstance(extra, str) else extra) if str(p).strip()]
+    paths = [p for p in dict.fromkeys(paths) if p]
+    if mode == "dir" and not paths:
         raise ValueError("path: укажите каталог с PDF-файлами, например /data/pdfs")
+    split = str(config.get("split") or "document").strip().lower()
+    if split not in ("document", "page"):
+        raise ValueError(f"split={split!r}: допустимо 'document' или 'page'")
     if mode == "url" and not urls:
         raise ValueError("urls: укажите прямые ссылки на PDF-файлы (список или строку)")
 
@@ -84,6 +96,9 @@ def options(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": mode,
         "path": path,
+        "paths": paths,
+        "split": split,
+        "date_from_text": bool(config.get("date_from_text")),
         "urls": urls,
         "max_files": max_files,
         "max_images": max_images,
@@ -147,17 +162,20 @@ async def _download(ctx: Context, url: str, dest: Path, max_bytes: int) -> str |
 
 async def _dir_candidates(opts: dict[str, Any], seen: dict[str, str]) -> list[tuple[str, Path, str | None]]:
     """(имя файла, путь, published) тех, чьё содержимое ещё не видено."""
-    root = Path(opts["path"])
-    if not root.is_dir():
-        raise RuntimeError(f"каталог {root} не найден — смонтируйте его в контейнер или поправьте path")
+    roots = [Path(p) for p in opts.get("paths") or [opts["path"]]]
+    if not any(root.is_dir() for root in roots):
+        raise RuntimeError(f"каталог {roots[0]} не найден — смонтируйте его в контейнер или поправьте path")
     out = []
-    for path in sorted(root.glob("*.pdf")):
-        if not path.is_file():
+    for root in roots:
+        if not root.is_dir():
             continue
-        sha = await asyncio.to_thread(_sha256, path)
-        if seen.get(path.name) == sha:
-            continue
-        out.append((path.name, path, _published_from_mtime(path)))
+        for path in sorted(root.glob("*.pdf")):
+            if not path.is_file():
+                continue
+            sha = await asyncio.to_thread(_sha256, path)
+            if seen.get(path.name) == sha:
+                continue
+            out.append((path.name, path, _published_from_mtime(path)))
     return out
 
 
@@ -271,6 +289,37 @@ async def _parse_file(
     return record, sha
 
 
+async def _parse_pages(
+    ctx: Context, path: Path, opts: dict[str, Any], url: str | None, published: str | None
+) -> tuple[list[dict[str, Any]], str]:
+    """Один PDF → записи по страницам с текстом (sha256:страница) и sha256 файла."""
+    sha = _sha256(path)
+    manager = _make_manager(path, settings.data_dir / "pdf_cache", opts["kwargs"])
+    await asyncio.to_thread(manager.extract_content)
+    pages = sorted(manager.texts, key=lambda doc: int(doc.metadata.get("page", 0)))
+    texts = [(doc.page_content or "").replace("[IMAGE]", "").strip() for doc in pages]
+    if opts["date_from_text"]:
+        from parser.pdf import date_hint  # без тяжёлых зависимостей
+        hint = date_hint(path.name, texts[0] if texts else "")
+        published = hint if hint != "unknown" else published
+    stem = Path(path.name).stem
+    records = []
+    for number, text in enumerate(texts, 1):
+        if len(text) < 80:  # обложка, пустая страница, одни картинки
+            continue
+        record: dict[str, Any] = {"id": f"{sha}:{number}", "text": text, "title": f"{stem} — стр. {number}",
+                                  "file_name": path.name, "page": number, "pages": len(texts), "sha256": sha}
+        if url:
+            record["url"] = url
+        if opts["source"]:
+            record["source"] = opts["source"]
+        if published:
+            record["published"] = published
+        records.append(record)
+    ctx.log(f"{path.name}: {len(texts)} стр., записей {len(records)}")
+    return records, sha
+
+
 def _mark(seen: dict[str, str], key: str, sha: str) -> None:
     seen.pop(key, None)
     seen[key] = sha
@@ -303,7 +352,15 @@ async def collect(ctx: Context) -> list[dict[str, Any]]:
         for key, path, published in candidates:
             url = key if opts["mode"] == "url" else None
             try:
-                parsed, sha = await _parse_file(ctx, path, opts, url, published)
+                if opts["split"] == "page":
+                    pages, sha = await _parse_pages(ctx, path, opts, url, published)
+                    if pages:
+                        _mark(seen, key, sha)
+                        records.extend(pages)
+                        continue
+                    parsed = None
+                else:
+                    parsed, sha = await _parse_file(ctx, path, opts, url, published)
             except Exception as exc:  # noqa: BLE001 — сбой одного файла не валит запуск
                 failures += 1
                 ctx.log(f"{key}: парсинг не удался ({type(exc).__name__}: {exc}) — попробую в следующий раз")

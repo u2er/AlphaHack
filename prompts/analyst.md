@@ -12,9 +12,13 @@ more. Be honest about both.
 {{company_profile}}
 
 Everything you say about impact is measured against this profile: its products,
-clients, markets, competitors, partners, regulators and goals. When the profile
-says nothing about something the record touches, say so instead of inventing
-it.
+clients, markets, competitors, partners, regulators and goals. Above is its main
+page; when a table of contents follows, the other pages — the company's own
+documents, contracts, financials, the onboarding dialog — are one
+`profile_search` or `profile_page` away. When the record touches a product,
+counterparty, market or figure the main page does not cover, search the profile
+first. Only when neither the main page nor the pages say anything about it, say
+so instead of inventing it.
 
 ## Language
 

@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from .controller import Controller
 from .insights import Insights, InsightsError
 
 STATIC = Path(__file__).resolve().parent
-MIME = {'index.html':'text/html; charset=utf-8','app.js':'text/javascript; charset=utf-8',
-        'bank.js':'text/javascript; charset=utf-8','style.css':'text/css; charset=utf-8'}
+MIME = {'index.html':'text/html; charset=utf-8','bank.js':'text/javascript; charset=utf-8',
+        'onboarding.js':'text/javascript; charset=utf-8','graph.js':'text/javascript; charset=utf-8',
+        'style.css':'text/css; charset=utf-8'}
+MAX_UPLOAD = 30*1024*1024
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AlfaProfileGUI/1'
@@ -61,14 +63,8 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.path.strip('/').split('/')
             if parts[:2] == ['api','insights']:
                 return self._insights(parts[2:],parse_qs(path.query))
-            if len(parts) >= 3 and parts[:2] == ['api','sessions']:
-                session = self.server.controller.get(parts[2])
-                if len(parts) == 3:
-                    return self.json(200,session.view())
-                if len(parts) == 4 and parts[3] == 'trace':
-                    return self.json(200,{'events':session.trace_events()})
-                if len(parts) == 4 and parts[3] == 'download':
-                    return self.json(200,session.export()['profile'],attachment='company-profile.json')
+            if len(parts) == 3 and parts[:2] == ['api','onboarding']:
+                return self.json(200,self.server.controller.get(parts[2]).view())
             name = 'index.html' if path.path == '/' else path.path.lstrip('/')
             if name in MIME:
                 data = (STATIC/name).read_bytes()
@@ -93,42 +89,79 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'feed':
                 importance = min(max(int(query.get('min_importance',['1'])[0]),0),5)
                 return self.json(200,{'items':insights.feed(parts[1],importance)})
+            if len(parts) == 4 and parts[0] == 'profiles' and parts[2] == 'pages':
+                return self.json(200,insights.page(parts[1],parts[3],int(query.get('offset',['0'])[0])))
+            if parts == ['connectors']:
+                return self.json(200,{'connectors':insights.connectors()})
+            if len(parts) == 3 and parts[0] == 'connectors' and parts[2] == 'runs':
+                return self.json(200,{'runs':insights.connector_runs(parts[1])})
+            if parts == ['graph']:
+                return self.json(200,insights.graph())
+            if parts == ['graph-search']:
+                return self.json(200,{'results':insights.graph_search(query.get('q',[''])[0][:300])})
+            if len(parts) == 3 and parts[0] == 'graph':
+                return self.json(200,insights.graph_element(parts[1],parts[2]))
+        except InsightsError as exc:
+            return self.error_json(502,str(exc))
+        return self.error_json(404,'Не найдено')
+
+    def _upload(self, session):
+        """A file as the raw request body; the name comes URL-encoded in X-Filename."""
+        self._check_origin()
+        size = int(self.headers.get('Content-Length','0'))
+        if not 0 < size <= MAX_UPLOAD:
+            raise ValueError('Файл пустой или больше 30 МБ')
+        name = unquote(self.headers.get('X-Filename',''))[:200]
+        return session.add_file(name,self.rfile.read(size))
+
+    def _insights_post(self, parts, body):
+        insights = self.server.insights
+        try:
+            if len(parts) == 3 and parts[0] == 'connectors':
+                return self.json(200,insights.connector_action(parts[1],parts[2]))
+            if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'sources':
+                return self.json(200,insights.set_sources(parts[1],body.get('sources') or []))
         except InsightsError as exc:
             return self.error_json(502,str(exc))
         return self.error_json(404,'Не найдено')
 
     def do_POST(self):
         try:
-            body = self._body()
             parts = urlsplit(self.path).path.strip('/').split('/')
-            if parts == ['api','sessions']:
-                session = self.server.controller.create(body.get('company_id'),body.get('name'),body.get('manual',False))
-                return self.json(201,session.view())
-            if len(parts) != 4 or parts[:2] != ['api','sessions']:
+            controller = self.server.controller
+            if parts[:2] == ['api','insights']:
+                return self._insights_post(parts[2:],self._body())
+            if parts[:2] != ['api','onboarding']:
                 return self.error_json(404,'Не найдено')
-            session = self.server.controller.get(parts[2])
-            action = parts[3]
-            if action == 'overview': result = session.overview()
-            elif action == 'start-overview': result = session.start_overview()
-            elif action == 'submit-manual': result = session.submit_manual(body.get('facts'))
-            elif action == 'edit': result = session.edit_key(body.get('scope'),body.get('key'),body.get('value'))
-            elif action == 'propose-edit': result = session.propose_edit(body.get('text',''))
-            elif action == 'decide-edit': result = session.decide_edit(body.get('accept',False))
-            elif action == 'confirm-profile': result = session.confirm_profile()
-            elif action == 'start-agent': result = session.start_agent()
-            elif action == 'answer-agent': result = session.answer_agent(body.get('value',''))
-            elif action == 'remove-topic': result = session.remove_topic(int(body.get('index',-1)))
-            elif action == 'confirm-assessment': result = session.confirm_assessment()
-            elif action == 'sites': result = session.sites(body.get('sites',[]),body.get('mode','include'))
-            elif action == 'export': result = session.export()
+            if len(parts) == 4 and parts[3] == 'files':
+                return self.json(201,self._upload(controller.get(parts[2])))
+            body = self._body()
+            if len(parts) == 2:
+                return self.json(201,controller.create().view())
+            session = controller.get(parts[2])
+            action = parts[3] if len(parts) > 3 else ''
+            if action == 'form' and len(parts) == 4: result = session.submit_form(body.get('form') or {})
+            elif action == 'answer' and len(parts) == 4: result = session.answer(body.get('value'))
+            elif action == 'pages' and len(parts) == 5:
+                result = session.edit_page(parts[4],body.get('title'),body.get('summary'),body.get('content'))
+            elif action == 'confirm' and len(parts) == 4: result = session.confirm(controller.publish)
+            elif action == 'sources' and len(parts) == 4:
+                known = {c['name']:(c.get('description') or c['name']).split(' — ')[0]
+                         for c in self.server.insights.connectors() if c.get('enabled')}
+                chosen = [str(name) for name in body.get('sources') or []]
+                if any(name not in known for name in chosen):
+                    raise ValueError('Нет таких источников: ' + ', '.join(n for n in chosen if n not in known))
+                result = session.set_sources(chosen,controller.publish,known)
             else: return self.error_json(404,'Не найдено')
             self.json(200,result)
         except KeyError as exc:
-            self.error_json(404,str(exc))
+            self.error_json(404,str(exc).strip("'"))
         except (ValueError,TypeError) as exc:
-            self.error_json(400,str(exc))
+            self.error_json(400,str(exc).splitlines()[0][:400])
         except PermissionError as exc:
             self.error_json(403,str(exc))
+        except InsightsError as exc:
+            self.error_json(502,str(exc))
         except Exception:
             self.error_json(500,'Внутренняя ошибка; проверьте терминал')
             raise
@@ -141,7 +174,7 @@ def create_server(host='127.0.0.1',port=8765,controller=None,insights=None):
 
 def main():
     import argparse
-    parser=argparse.ArgumentParser(description='Локальный GUI для тестирования профиля')
+    parser=argparse.ArgumentParser(description='Интерфейс «Альфа-Бизнес»: бизнес-аналитика и чат добавления компании')
     parser.add_argument('--port',type=int,default=8765)
     # 0.0.0.0 only inside a container, where compose publishes the port on 127.0.0.1.
     parser.add_argument('--host',default='127.0.0.1')

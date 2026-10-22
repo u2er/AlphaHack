@@ -291,3 +291,14 @@ async def test_website_items_carry_images_by_default():
 
     items, _ = await run("website", web, {"url": f"{SITE}/news/", "backfill": 1, "delay": 0, "images": False})
     assert "image" not in items[0]
+
+
+def test_query_only_root_rules_do_not_block_the_whole_site():
+    from urllib.robotparser import RobotFileParser
+
+    from eventgraph.connectors.kinds.website import robots_lines
+
+    robots = RobotFileParser()
+    robots.parse(robots_lines(["User-agent: *", "Disallow: /search", "Disallow: /?", "Disallow: /?utm="]))
+    assert robots.can_fetch("EventGraph", "https://lenta.ru/rubrics/economics/")
+    assert not robots.can_fetch("EventGraph", "https://lenta.ru/search")

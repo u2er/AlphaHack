@@ -17,6 +17,7 @@ class Base(DeclarativeBase):
 COLUMNS = (
     "ALTER TABLE items ADD COLUMN IF NOT EXISTS analysis JSONB",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS variables JSONB",
+    "ALTER TABLE connectors ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT false",
 )
 
 

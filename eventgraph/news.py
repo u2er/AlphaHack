@@ -219,7 +219,9 @@ async def process(item: Item, connector: str, cfg: "GraphSettings") -> dict[str,
     только прошлые новости. Уже сделанные оценки не повторяются."""
     files = image_files(item, cfg.item_images) if cfg.item_images > 0 and settings.llm_vision else []
     pictures, events = [name for name, _ in files], await story_events(item)
-    clients = await profiles.active()
+    clients = [c for c in await profiles.active() if c.wants(connector)]
+    if not clients:
+        return await _below_threshold(item, connector, None, "ни один клиент не выбрал этот источник", None)
     assessments, fresh, assessed = analyst.by_profile(item.analysis), False, None
     if analyst.configured():
         message = None
@@ -269,7 +271,7 @@ async def _below_threshold(item: Item, connector: str, analysis: dict[str, Any] 
     logger.info("запись %s (%s): %s — %s", item.uid, connector, analyst.BELOW, reason)
     stats = run_stats(row) if row is not None else {"steps": 0, "tool_calls": 0, "tokens": 0, "duration_ms": 0}
     return {"uid": item.uid, "run_id": stored.agent_run_id, "result": "done", "verdict": analyst.BELOW, "error": "",
-            "ok": True, "importance": stored.analysis["importance"], **stats}
+            "ok": True, "importance": (stored.analysis or {}).get("importance"), **stats}
 
 
 async def process_next(cfg: "GraphSettings") -> dict[str, Any] | None:

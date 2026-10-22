@@ -78,6 +78,9 @@ class Settings(BaseSettings):
 
     # ── Граф ─────────────────────────────────────────────────────────────────
     graph_name: str = "news"
+    # Базовый граф при пустом: builtin — снимок eventgraph/seed/, путь — свой
+    # снимок (выгрузка GET /graphs/{graph}), off — не загружать.
+    graph_seed: str = "builtin"
     # Сколько находок отдаёт поиск по графу и с какого сходства они считаются.
     graph_search_limit: int = 8
     graph_score_threshold: float = 0.35

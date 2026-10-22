@@ -445,12 +445,39 @@ async def test_url_mode_non_pdf_body_is_not_marked_seen(tmp_path, monkeypatch):
 # ── провязка с sources.py ────────────────────────────────────────────────────
 
 
-def test_pdf_source_is_registered():
-    from eventgraph.sources import BY_NAME
+def test_bank_analytics_source_is_registered():
+    from eventgraph.sources import BANK_DOCS, BY_NAME
 
-    source = BY_NAME["pdf_docs"]
+    source = BY_NAME["alfa_analytics"]
     assert source.kind == "pdf"
-    assert source.images is True
     assert source.timeout is not None
-    assert source.config["mode"] == "dir"
-    assert source.config["path"] == "/data/pdfs"
+    assert source.config["mode"] == "dir" and source.config["split"] == "page"
+    assert source.config["path"] == str(BANK_DOCS) and "/data/pdfs" in source.config["paths"]
+    assert any(BANK_DOCS.glob("*.pdf"))
+
+
+async def test_page_split_makes_a_record_per_page_dated_by_the_first_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    data = make_pdf("Macro report")
+    first = "Центр макроэкономического анализа. 11 сентября 2026 г. Ключевая ставка сохранена на уровне 14%."
+    second = "Инфляция замедляется, но ЦБ ужесточил риторику; мы ожидаем паузы в снижении ставки до конца года."
+    install_fake(monkeypatch, {sha256(data): {"text": None, "pages": [first, "[IMAGE]", second]}})
+    docs, extra = tmp_path / "docs", tmp_path / "missing"
+    docs.mkdir()
+    (docs / "Policy_Rate.pdf").write_bytes(data)
+
+    records, ctx = await run({"mode": "dir", "path": str(docs), "paths": [str(extra)], "split": "page",
+                              "date_from_text": True, "source": "Аналитика"})
+
+    assert [r["page"] for r in records] == [1, 3]  # an image-only page is skipped
+    assert records[0]["id"] == f"{sha256(data)}:1" and records[1]["title"] == "Policy_Rate — стр. 3"
+    assert {r["published"] for r in records} == {"2026-09-11"}
+    assert records[0]["source"] == "Аналитика"
+    assert ctx.state["seen"] == {"Policy_Rate.pdf": sha256(data)}
+    again, _ = await run({"mode": "dir", "path": str(docs), "split": "page"}, ctx.state)
+    assert again == []
+
+
+async def test_split_mode_is_checked():
+    with pytest.raises(ValueError, match="split"):
+        await run({"mode": "dir", "path": "/tmp", "split": "chapter"})

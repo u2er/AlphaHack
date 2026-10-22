@@ -101,3 +101,42 @@ async def test_the_profiles_dir_loads_new_and_changed_files_once(tmp_path, monke
     assert await profiles.sync_dir(tmp_path) == 0
     assert loaded == [("demo-vectorfood", "file")]
     assert await profiles.sync_dir(tmp_path / "нет") == 0
+
+
+# ── страничный профиль: инструменты аналитика ───────────────────────────────
+
+
+def test_paged_profiles_give_the_analyst_profile_tools_and_its_id():
+    from eventgraph.agents.tools import ToolContext, build_tools, system_text
+
+    plain = ToolContext(spec=SPECS["analyst"], graph="news")
+    paged = ToolContext(spec=SPECS["analyst"], graph="news", profile_id="demo-vectorfood")
+    assert "profile_search" not in {t.name for t in build_tools(plain)}
+    assert {"profile_page", "profile_search"} <= {t.name for t in build_tools(paged)}
+    assert "profile_search" in system_text(paged) and "profile_search" not in system_text(plain)
+
+
+async def test_the_analyst_run_carries_the_profile_id_only_for_paged_profiles(monkeypatch):
+    seen = []
+
+    async def create(agent, message, history=None, attachments=None, variables=None):
+        seen.append(variables)
+        return 1
+
+    async def execute(run_id):
+        from eventgraph.models import AgentRun
+        return AgentRun(id=1, status="done", output="", error="")
+
+    monkeypatch.setattr(analyst.runner, "create", create)
+    monkeypatch.setattr(analyst.runner, "execute", execute)
+    await analyst.assess("m", "01A", {}, profiles.Active("p1", "Клиент", "Текст", paged=True))
+    await analyst.assess("m", "01A", {}, profiles.fallback())
+    assert seen[0] == {"company_profile": "Текст", "profile_id": "p1"}
+    assert seen[1] == {"company_profile": settings.company_profile}
+
+
+def test_v2_exports_are_accepted_as_they_are():
+    v2 = json.loads((FIXTURE.parent / "vectorfood-v2.json").read_text(encoding="utf-8"))
+    doc, prompt = profiles.parse(v2)
+    assert [p.id for p in doc.pages][:2] == ["main", "products"]
+    assert "[finance]" in prompt and "Чистый долг" not in prompt

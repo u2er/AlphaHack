@@ -201,9 +201,22 @@ async def load_robots(site, url):
     except httpx.HTTPError:
         status, text = 0, ""
     lines = text.splitlines() if status == 200 else []
-    robots.parse(lines)
+    robots.parse(robots_lines(lines))
     sitemaps = [line.split(":", 1)[1].strip() for line in lines if line.lower().startswith("sitemap:")]
     return robots, sitemaps
+
+
+def robots_lines(lines: list[str]) -> list[str]:
+    """Строки robots.txt без правил «/?…» — запрета адресов с параметрами на корне.
+    urllib.robotparser до Python 3.13 нормализует «Disallow: /?» в «Disallow: /»
+    и запрещает весь сайт (lenta.ru). Корень с параметрами коннектор не читает."""
+    out = []
+    for line in lines:
+        key, _, value = line.partition(":")
+        if key.strip().lower() == "disallow" and value.strip().startswith("/?"):
+            continue
+        out.append(line)
+    return out
 
 
 # ── RSS ──────────────────────────────────────────────────────────────────────

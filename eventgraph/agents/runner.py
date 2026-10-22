@@ -303,7 +303,8 @@ async def execute(run_id: int) -> AgentRun:
 async def _loop(run_id: int, spec: AgentSpec, task: str, prior: list[dict[str, Any]],
                 attachments: dict[str, str], stats: dict[str, int],
                 variables: dict[str, str] | None = None) -> dict[str, Any]:
-    ctx = ToolContext(spec=spec, graph=settings.graph_name, attachments=attachments)
+    ctx = ToolContext(spec=spec, graph=settings.graph_name, attachments=attachments,
+                      profile_id=(variables or {}).get("profile_id") or None)
     tools: dict[str, Tool] = {tool.name: tool for tool in build_tools(ctx)}
     schemas = [tool.schema() for tool in tools.values()] or None
     params = {"temperature": spec.temperature, **settings.llm_extra}

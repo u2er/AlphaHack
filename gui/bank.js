@@ -10,7 +10,6 @@ const HORIZON = { immediate: 'сразу', weeks: 'недели', months: 'ме�
 const RELEVANCE = { direct: 'прямое влияние', indirect: 'косвенное влияние', none: 'не касается' };
 const TREND = { new: 'новое', continues: 'продолжается', escalates: 'усиливается', eases: 'ослабевает' };
 const ROLES = { competitor: 'конкурент', partner: 'партнёр', client: 'клиент', supplier: 'поставщик', regulator: 'регулятор', other: 'участник' };
-const DEMO_TITLES = { accounts: 'Счета', payments: 'Платежи', salary: 'Зарплатный проект', credit: 'Кредиты' };
 
 let profiles = [], current = null, items = [], selected = null, direction = '';
 
@@ -31,13 +30,15 @@ function route() {
   const hash = location.hash || '#/home';
   let view = 'home', sub = '';
   if (hash.startsWith('#/')) [view, sub] = hash.slice(2).split('/');
-  else if (document.querySelector(`#view-profile ${CSS.escape(hash)}`)) view = 'profile';  // шаги мастера: #draft…
-  if (!['home', 'insights', 'demo', 'profile'].includes(view)) view = 'home';
+  if (!['home', 'insights', 'profile', 'onboarding', 'graph'].includes(view)) view = 'home';
   for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== `view-${view}`;
-  for (const a of document.querySelectorAll('.menu a')) a.classList.toggle('active', a.getAttribute('href') === (view === 'demo' ? hash : `#/${view}`));
+  for (const a of document.querySelectorAll('.menu a')) a.classList.toggle('active', a.getAttribute('href') === `#/${view}`);
   $('sidebar').classList.remove('open');
-  if (view === 'demo') $('demoTitle').textContent = DEMO_TITLES[sub] || 'Раздел';
   if (view === 'home' || view === 'insights') loadFeed();
+  if (view === 'profile') renderProfilePage();
+  if (view === 'onboarding') window.Alfa.onboarding.open();
+  if (view === 'graph') window.AlfaGraph.open();
+  if (view === 'insights' && tab === 'sources') renderSources();
   if (hash.startsWith('#/')) window.scrollTo(0, 0);
 }
 
@@ -63,22 +64,35 @@ async function selectClient(id) {
   try { current = await api(`/api/insights/profiles/${encodeURIComponent(id)}`); }
   catch (error) { notice(error.message, true); return; }
   renderProfileHeader();
+  if (tab === 'sources' && connectors.length) renderClientSources();
   await loadFeed(true);
+}
+
+function renderProfilePage() {
+  const box = $('profilePager');
+  if (!current) {
+    const empty = el('div', '', 'panel empty');
+    empty.append(el('h3', 'Профилей пока нет'), el('p', 'Добавьте компанию — анкета, документы и пара вопросов.'));
+    const link = el('a', 'Добавить компанию', 'button-link'); link.href = '#/onboarding'; empty.append(link);
+    return box.replaceChildren(empty);
+  }
+  $('profileTitle').textContent = current.name;
+  const pages = [{ id: 'main', title: 'Основное', summary: 'Агенты видят всегда', content: current.main }, ...current.toc];
+  window.Alfa.pager(box, {
+    pages,
+    load: async page => page.content ?? (await api(`/api/insights/profiles/${encodeURIComponent(current.id)}/pages/${encodeURIComponent(page.id)}`)).content,
+  });
 }
 
 function renderProfileHeader() {
   const name = current?.name || 'компании';
+  $('homeProfile').textContent = current ? `${current.toc.length + 1} стр. профиля` : 'Добавьте компанию';
+  if (!$('view-profile').hidden) renderProfilePage();
   $('homeTitle').textContent = name;
   const hour = new Date().getHours();
   $('homeGreeting').textContent = hour < 6 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер';
   $('insightsTitle').textContent = `Лента для ${name}`;
   $('insightsRole').textContent = current?.user_role ? `Отобрано под вашу роль: ${current.user_role}` : '';
-  const topics = $('topics'); topics.replaceChildren();
-  for (const t of current?.topics || []) {
-    const chip = el('span', '', 'topic-chip'); chip.append(el('b', t.title));
-    chip.title = [t.rationale, ...t.sources.map(s => `${s.filename}, стр. ${s.page} (${s.date_hint})`)].join('\n');
-    topics.append(chip);
-  }
 }
 
 // ── лента ───────────────────────────────────────────────────────────────────
@@ -125,7 +139,7 @@ function renderEmpty(message) {
   if (message) { box.append(el('h3', 'Бизнес‑аналитика недоступна'), el('p', message)); }
   else {
     box.append(el('h3', 'Расскажите о компании'), el('p', 'Лента подбирается под профиль: заполните его — и новости начнут оцениваться для вашего бизнеса.'));
-    const link = el('a', 'Заполнить профиль', 'button-link'); link.href = '#/profile'; box.append(link);
+    const link = el('a', 'Добавить компанию', 'button-link'); link.href = '#/onboarding'; box.append(link);
   }
   $('feed').replaceChildren(box); $('detail').replaceChildren();
   $('entryList').replaceChildren(el('div', message || 'Создайте профиль компании, чтобы получить персональную ленту.', 'mini'));
@@ -208,6 +222,102 @@ const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one : n %
 // ── события ─────────────────────────────────────────────────────────────────
 $('clientSelect').onchange = e => selectClient(e.target.value);
 $('importanceFilter').onchange = () => loadFeed(true);
+// ── источники: коннекторы и выбор компании ─────────────────────────────────
+let tab = 'feed', connectors = [], sourcesTimer = null;
+const STATUS = { ok: 'успешно', error: 'ошибка', timeout: 'таймаут', running: 'идёт', '': 'ещё не запускался' };
+const when = value => value ? new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+
+async function post(path, body = {}) {
+  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json(); if (!response.ok) throw Error(data.error || `HTTP ${response.status}`); return data;
+}
+
+function switchTab(next) {
+  tab = next;
+  for (const b of $('insightsTabs').children) b.classList.toggle('on', b.dataset.tab === tab);
+  $('insightsFeed').hidden = tab !== 'feed'; $('insightsSources').hidden = tab !== 'sources';
+  clearInterval(sourcesTimer); sourcesTimer = null;
+  if (tab === 'sources') { renderSources(); sourcesTimer = setInterval(() => { if (!$('view-insights').hidden && tab === 'sources') renderConnectors(); }, 10000); }
+}
+
+async function renderSources() {
+  try { connectors = (await api('/api/insights/connectors')).connectors; } catch (error) { notice(error.message, true); return; }
+  renderClientSources(); renderConnectors();
+}
+
+function renderClientSources() {
+  const box = $('clientSources'); box.replaceChildren();
+  if (!current) { box.append(el('p', 'Добавьте компанию, чтобы выбрать её источники.', 'muted')); return; }
+  box.append(el('h2', `Источники для ${current.name}`), el('p', 'Новости из невыбранных источников для этой компании не оцениваются и в её ленту не попадают.', 'muted'));
+  const chosen = new Set(current.news_sources?.length ? current.news_sources : connectors.filter(c => c.enabled).map(c => c.name));
+  const list = el('div', '', 'chips');
+  for (const c of connectors.filter(c => c.enabled)) {
+    const l = el('label', '', 'chip-check'); const i = el('input'); i.type = 'checkbox'; i.value = c.name; i.checked = chosen.has(c.name);
+    l.append(i, el('span', c.description.split(' — ')[0] || c.name)); l.title = c.description; list.append(l);
+  }
+  const save = el('button', 'Сохранить источники');
+  save.onclick = async () => {
+    const names = [...list.querySelectorAll('input:checked')].map(i => i.value);
+    if (!names.length) return notice('Выберите хотя бы один источник', true);
+    save.disabled = true;
+    try { await post(`/api/insights/profiles/${encodeURIComponent(current.id)}/sources`, { sources: names }); current.news_sources = names; notice('Источники сохранены'); }
+    catch (error) { notice(error.message, true); } finally { save.disabled = false; }
+  };
+  box.append(list, save);
+}
+
+function renderConnectors() {
+  const box = $('connectors');
+  api('/api/insights/connectors').then(data => { connectors = data.connectors; draw(); }).catch(error => notice(error.message, true));
+  const draw = () => {
+    box.replaceChildren(el('h2', 'Коннекторы', 'section-title'));
+    for (const c of connectors) {
+      const card = el('article', '', 'panel connector');
+      const head = el('div', '', 'pager-head'), title = el('div');
+      title.append(el('h3', c.description.split(' — ')[0] || c.name), el('p', c.description, 'muted'));
+      const state = !c.enabled ? ['выключен', 'chip'] : c.paused ? ['на паузе', 'chip mixed'] : ['активен', 'chip opportunity'];
+      head.append(title, el('span', state[0], state[1]));
+      const facts = el('div', '', 'card-foot');
+      facts.append(el('span', `${c.name} · ${c.kind}`), el('span', c.interval_seconds ? `каждые ${Math.round(c.interval_seconds / 60)} мин` : 'вручную'),
+        el('span', `записей: ${c.items_count}`), el('span', `последний запуск: ${when(c.last_run_at)} — ${STATUS[c.last_status] ?? c.last_status}`));
+      card.append(head, facts);
+      if (c.last_error) card.append(el('p', c.last_error, 'source-line warning'));
+      const row = el('div', '', 'buttonrow');
+      const action = (text, name, cls = 'secondary', ask = '') => {
+        const b = el('button', text, cls); b.disabled = !c.enabled && name !== 'test';
+        b.onclick = async () => {
+          if (ask && !confirm(ask)) return;
+          b.disabled = true;
+          try { await post(`/api/insights/connectors/${encodeURIComponent(c.name)}/${name}`); notice(`${c.name}: ${text.toLowerCase()} — принято`); renderConnectors(); }
+          catch (error) { notice(error.message, true); b.disabled = false; }
+        };
+        return b;
+      };
+      row.append(action('Запустить', 'run', ''), action('Проба', 'test'),
+        c.paused ? action('Возобновить', 'resume') : action('Пауза', 'pause'),
+        action('Сбросить курсор', 'reset', 'secondary', 'Следующий запуск начнёт источник с начала. Продолжить?'));
+      const history = el('button', 'История', 'secondary'), runs = el('div', '', 'runs');
+      history.onclick = async () => {
+        if (runs.childElementCount) return runs.replaceChildren();
+        try {
+          const data = await api(`/api/insights/connectors/${encodeURIComponent(c.name)}/runs`);
+          runs.replaceChildren(...(data.runs.length ? data.runs.map(r => {
+            const line = el('div', '', 'run-row');
+            line.append(el('b', `${when(r.created_at)} · ${r.kind}`), el('span', `${STATUS[r.status] ?? r.status} · новых ${r.items_new} из ${r.items_total}`));
+            if (r.error) line.append(el('small', r.error, 'warning'));
+            if (r.kind === 'test' && r.preview?.length) line.append(el('small', 'Проба: ' + r.preview.slice(0, 3).map(x => x.title || (x.text || '').slice(0, 60)).join(' · '), 'muted'));
+            return line;
+          }) : [el('p', 'Запусков ещё не было.', 'muted')]));
+        } catch (error) { notice(error.message, true); }
+      };
+      row.append(history); card.append(row, runs); box.append(card);
+    }
+  };
+  if (connectors.length) draw();
+}
+
+$('insightsTabs').onclick = e => { const b = e.target.closest('button'); if (b) switchTab(b.dataset.tab); };
+
 $('directionFilter').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   direction = b.dataset.direction;

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
-from eventgraph import gardening, graph_settings, news, profiles, stories
+from eventgraph import gardening, graph_settings, news, profiles, seed, stories
 from eventgraph.agents import runner
 from eventgraph.config import settings
 from eventgraph.connectors import service
@@ -32,6 +32,7 @@ class Worker:
         self._active: dict[int, asyncio.Task] = {}  # run_id → задача
         self._busy_connectors: set[int] = set()
         self._graph_task: asyncio.Task | None = None
+        self._seed_task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
     async def start(self) -> None:
@@ -41,6 +42,8 @@ class Worker:
         await gardening.recover()
         if loaded := await profiles.sync_dir():
             logger.info("профили клиентов из %s: %s", settings.profiles_dir, loaded)
+        # Базовый граф — в фоне: векторы тысяч элементов считаются минутами.
+        self._seed_task = asyncio.create_task(self._seed())
         lost = await runner.recover()
         if lost:
             logger.info("раны агентов прерваны перезапуском: %s", lost)
@@ -57,6 +60,12 @@ class Worker:
                 .values(status="error", error="Воркер перезапущен посреди запуска", finished_at=_now())
             )
             await session.commit()
+
+    async def _seed(self) -> None:
+        try:
+            await seed.seed_if_empty()
+        except Exception:  # noqa: BLE001 — без базового графа воркер работает
+            logger.exception("базовый граф не загружен")
 
     def stop(self) -> None:
         self._stop.set()
@@ -100,6 +109,7 @@ class Worker:
                 await session.execute(
                     select(Connector).where(
                         Connector.name.in_(list(scheduled)),
+                        Connector.paused.is_(False),
                         (Connector.next_run_at.is_(None)) | (Connector.next_run_at <= now),
                     )
                 )
@@ -205,6 +215,8 @@ class Worker:
             # Сюжеты для записей, которые при сборе не получили вектора.
             await stories.organize()
             while not self._stop.is_set():
+                # Новый клиент не ждёт, пока разберётся очередь: сверка — stat файлов.
+                await profiles.sync_dir()
                 result = await news.process_next(cfg)
                 if result is None:
                     return

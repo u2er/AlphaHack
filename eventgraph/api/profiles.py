@@ -12,6 +12,8 @@ from eventgraph import analyst, profiles
 from eventgraph.db import get_session
 from eventgraph.deps import require_auth
 from eventgraph.models import CompanyProfile, Connector, Item
+from eventgraph.sources import BY_NAME
+from profile.contract import load_profile, table_of_contents
 
 router = APIRouter(prefix="/profiles", tags=["profiles"], dependencies=[Depends(require_auth)])
 
@@ -71,7 +73,45 @@ async def put_profile(payload: dict[str, Any] = Body(..., description="эксп�
 async def get_profile(profile_id: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     """Профиль целиком: экспорт и текст, который видит аналитик."""
     row = await _get(session, profile_id)
-    return {**ProfileOut.model_validate(row).model_dump(mode="json"), "prompt": row.prompt, "payload": row.payload}
+    return {**ProfileOut.model_validate(row).model_dump(mode="json"), "prompt": row.prompt, "payload": row.payload,
+            "toc": table_of_contents(load_profile(row.payload)),
+            "news_sources": (row.payload or {}).get("news_sources", [])}
+
+
+class SourcesIn(BaseModel):
+    sources: list[str]
+
+
+@router.put("/{profile_id}/sources")
+async def put_sources(profile_id: str, body: SourcesIn) -> dict[str, Any]:
+    """Какие источники смотрит клиент: записи других он не получает. Пусто — все."""
+    unknown = [name for name in body.sources if name not in BY_NAME]
+    if unknown:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Нет таких источников: {', '.join(unknown)}")
+    row = await profiles.set_sources(profile_id, body.sources)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Профиль не найден")
+    return {"id": row.id, "news_sources": row.payload.get("news_sources", [])}
+
+
+@router.get("/{profile_id}/pages/{page_id}")
+async def get_page(profile_id: str, page_id: str, offset: int = Query(default=0, ge=0),
+                   limit: int = Query(default=profiles.PAGE_WINDOW, ge=500, le=50000)) -> dict[str, Any]:
+    """Страница профиля — то же, что видит аналитик через profile_page."""
+    result = await profiles.page(profile_id, page_id, offset, limit)
+    if not result.get("ok"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, result.get("error"))
+    return result
+
+
+@router.get("/{profile_id}/search")
+async def search_profile(profile_id: str, q: str = Query(min_length=1, max_length=500),
+                         mode: str = Query(default="hybrid", pattern="^(hybrid|vector|keyword)$"),
+                         limit: int = Query(default=6, ge=1, le=20),
+                         session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Поиск по страницам профиля — то же, что profile_search аналитика."""
+    await _get(session, profile_id)
+    return await profiles.search(profile_id, q, mode, limit)
 
 
 @router.delete("/{profile_id}")

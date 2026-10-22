@@ -36,7 +36,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('пользователь не знает',text)
         self.assertIn('В наборе отмечены кредитный продукт',text)  # coded value 1.0, not a raw number
         self.assertIn('не называй их поставщиками',text)
-        self.assertIn('Ставка: Кредитная нагрузка [источники: rate.pdf (2026-09-11)]',text)
+        self.assertNotIn('Темы наблюдения',text)  # topics are no longer part of the profile
         self.assertIn('ID обезличены',text)
         self.assertNotIn('U_2',text)  # counterparties are counted, not named
 
@@ -52,7 +52,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(display_name(export),'ВекторФуд')
         text=render_for_prompt(export)
         self.assertIn('Финансовый директор',text)
-        self.assertNotIn('по материалам аналитики банка',text)  # topics without sources do not claim them
+        self.assertNotIn('Темы наблюдения',text)
 
     def test_publish_writes_to_the_shared_folder_only_when_configured(self):
         payload=exported()

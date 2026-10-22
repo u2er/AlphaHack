@@ -7,6 +7,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Computed,
     DateTime,
     Float,
     ForeignKey,
@@ -18,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from eventgraph.db import Base
@@ -47,6 +48,8 @@ class Connector(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_status: Mapped[str] = mapped_column(String(20), default="")
     last_error: Mapped[str] = mapped_column(Text, default="")
+    # Пауза из интерфейса: по расписанию не запускается, вручную — можно.
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -142,6 +145,23 @@ class CompanyProfile(Base):
     source: Mapped[str] = mapped_column(String(20), default="api")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ProfileChunk(Base):
+    """Фрагмент страницы профиля (кроме основной — её агент видит целиком):
+    по `vec` идёт поиск по смыслу, по `tsv` — по словам (profile_search)."""
+
+    __tablename__ = "profile_chunks"
+    __table_args__ = (Index("ix_profile_chunks_tsv", "tsv", postgresql_using="gin"),)
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)  # profile:page:n
+    profile_id: Mapped[str] = mapped_column(ForeignKey("company_profiles.id", ondelete="CASCADE"), index=True)
+    page_id: Mapped[str] = mapped_column(String(64))
+    page_title: Mapped[str] = mapped_column(String(200), default="")
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text, default="")
+    vec: Mapped[list[float] | None] = mapped_column(Vector(), nullable=True)
+    tsv: Mapped[Any] = mapped_column(TSVECTOR, Computed("to_tsvector('russian', coalesce(text, ''))", persisted=True))
 
 
 # ── обслуживание графа ──────────────────────────────────────────────────────

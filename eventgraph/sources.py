@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from eventgraph.connectors.kinds import pdf, telegram_channel, website
@@ -37,36 +38,49 @@ class Source:
         return self.collect.__module__.rsplit(".", 1)[-1]
 
 
+# Каталог аналитики Альфа-Банка в репозитории (приложение 2 кейса) — и в образе.
+BANK_DOCS = Path(__file__).resolve().parent.parent / "формулировка и данные хакатона" / "приложение 2"
+
 # Источники. Новый — строка здесь; код сборщиков — в connectors/kinds/,
-# их настройки описаны в начале каждого модуля.
+# их настройки описаны в начале каждого модуля. Клиент выбирает, какие из них
+# смотреть (профиль: news_sources), — запись оценивается только для подписанных.
 SOURCES: tuple[Source, ...] = (
     Source(
-        name="tsunews",
-        collect=telegram_channel.collect,
-        config={"channel": "tsunews", "backfill": 10, "max_pages": 10},
-        description="Telegram-канал ТГУ",
-    ),
-    Source(
-        name="tsu_news_site",
+        name="lenta_economics",
         collect=website.collect,
-        config={"url": "https://news.tsu.ru/news/", "backfill": 10, "max_new_per_run": 30},
-        description="Новости на сайте ТГУ",
+        config={"url": "https://lenta.ru/rubrics/economics/", "mode": "rss",
+                "feed_url": "https://lenta.ru/rss/news/economics", "backfill": 10, "max_new_per_run": 15},
+        description="Lenta.ru — новости экономики (RSS рубрики)",
+        interval_seconds=1800,
     ),
-    # PDF кладут в ./pdfs на хосте (в контейнере это /data/pdfs); файл — одна
-    # запись: весь текст документа, картинки и таблицы. Первый запуск с движком
-    # docling скачивает модели (~1 ГБ) в HF_HOME, поэтому потолок выше общего.
     Source(
-        name="pdf_docs",
-        collect=pdf.collect,
-        config={
-            "mode": "dir",
-            "path": "/data/pdfs",
-            "source": "Документы",
-            "max_files_per_run": 3,
-        },
-        description="PDF-документы из каталога /data/pdfs",
+        name="alfa_investments",
+        collect=telegram_channel.collect,
+        config={"channel": "alfa_investments", "backfill": 10, "max_pages": 5},
+        description="Альфа-Инвестиции — аналитика и идеи (Telegram-канал @alfa_investments)",
         interval_seconds=3600,
-        images=True,
+    ),
+    # Сайт закрыт защитой от ботов (JS-проверка servicepipe): без договорённости
+    # с банком о доступе коннектор получает 403. Обходить её мы не будем —
+    # те же материалы идут через канал alfa_investments.
+    Source(
+        name="alfa_investor_site",
+        collect=website.collect,
+        config={"url": "https://alfabank.ru/alfa-investor/posts/", "backfill": 10, "max_new_per_run": 15},
+        description="Альфа-Инвестор — статьи на alfabank.ru (выключен: сайт закрыт защитой от ботов)",
+        enabled=False,
+    ),
+    # Отчёты аналитиков банка: приложение 2 и всё, что кладут в ./pdfs (в
+    # контейнере /data/pdfs). Запись — страница отчёта. Разбор — docling; кэш
+    # общий с библиотекой профиля, поэтому повторно отчёты не распознаются.
+    Source(
+        name="alfa_analytics",
+        collect=pdf.collect,
+        config={"mode": "dir", "path": str(BANK_DOCS), "paths": ["/data/pdfs"], "split": "page",
+                "date_from_text": True, "source": "Аналитика Альфа-Банка", "max_files_per_run": 3, "max_images": 0},
+        description="Аналитика Альфа-Банка — PDF-отчёты (приложение 2 и каталог pdfs), по странице на запись",
+        interval_seconds=3600,
+        images=False,
         timeout=3600,
     ),
 )

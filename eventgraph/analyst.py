@@ -165,7 +165,11 @@ async def assess(message: str, uid: str, attachments: dict[str, str],
                  profile: Active | None = None) -> tuple[dict[str, Any], Any]:
     """Ран аналитика на запись для клиента `profile` (без него — профиль из
     настроек): (оценка с номером рана — или `error` с ним же, строка рана)."""
-    variables = {"company_profile": profile.prompt} if profile is not None else None
+    variables = None
+    if profile is not None:
+        variables = {"company_profile": profile.prompt}
+        if profile.paged:
+            variables["profile_id"] = profile.id  # страницы профиля — инструментами profile_*
     run_id = await runner.create("analyst", message, attachments=attachments, variables=variables)
     row = await runner.execute(run_id)
     output = (row.output or "") if row.status == "done" else ""
