@@ -293,6 +293,9 @@ class Onboarding:
                 self.field_metadata = field_context(self.store)
             except ValueError:
                 self.company = {}
+            except Exception as exc:  # noqa: BLE001 — библиотека ещё не готова: профиль по анкете и файлам
+                log.warning('Набор банка для %s недоступен: %s', clean['company_id'], str(exc)[:200])
+                self.company, self.signals = {}, {}
         summary = '\n'.join(f'{FORM_FIELDS[k]}: {", ".join(v) if isinstance(v, list) else v}' for k, v in clean.items())
         files = ', '.join(f.filename for f in self.files.values())
         self.say('user', 'form_answer', summary + (f'\nФайлы: {files}' if files else ''), form=clean)

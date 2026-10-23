@@ -164,6 +164,7 @@ function bubble(message) {
 function formCard() {
   const box = el('div', '', 'form-card');
   if (session.status !== 'form') { box.append(el('p', 'Анкета отправлена.', 'muted')); return box; }
+  box.classList.add('form-live');  // редактируемая анкета: после отправки чат перерисуется один раз
   box.append(el('h3', 'Анкета компании'));
   // компания из набора банка или название
   const company = el('div', '', 'form-row'); company.append(el('label', 'Компания', 'fieldlabel'));
@@ -285,8 +286,10 @@ function questionCard(q) {
 function renderAll() {
   if (!session) return;
   const chat = $('chat');
-  const form = chat.querySelector('.form-card');
-  if (form && session.status !== 'form') { rendered = 0; chat.replaceChildren(); }
+  // Открытая анкета после отправки сменяется строкой «Анкета отправлена» — один раз.
+  // Эта строка тоже .form-card, поэтому проверяем только редактируемую анкету: иначе
+  // каждый опрос стирал бы чат вместе с отмеченными вариантами вопроса.
+  if (chat.querySelector('.form-live') && session.status !== 'form') { rendered = 0; chat.replaceChildren(); }
   for (const message of session.messages.slice(rendered)) chat.append(bubble(message));
   rendered = session.messages.length;
   // Карточку вопроса не перерисовываем, пока вопрос тот же: опрос раз в 1,5 с

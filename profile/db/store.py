@@ -70,6 +70,14 @@ class Store:
                 (pattern, pattern, pattern, query, limit)).fetchall()
         return [row['payload'] for row in rows]
 
+    def ready(self):
+        """Is the company library loaded? Checked without touching missing tables:
+        a query against them would fill the Postgres log with ERROR lines."""
+        with self.connection() as c:
+            row = c.execute("SELECT to_regclass('profile_data.field_labels') AS labels, "
+                            "to_regclass('profile_data.companies') AS companies").fetchone()
+        return bool(row['labels'] and row['companies'])
+
     def field_labels(self):
         with self.connection() as c:
             rows = c.execute('''SELECT field_key,label,description,section,sort_order

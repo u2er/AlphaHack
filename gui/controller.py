@@ -35,26 +35,32 @@ class Controller:
         from profile.db.prepare import ensure_companies
 
         def run():
-            self.library_loading = True
             try:
+                log.info('Проверяю библиотеку компаний приложения 1')
                 if ensure_companies(self.store.dsn):
                     log.info('Библиотека компаний приложения 1 загружена')
+                else:
+                    log.info('Библиотека компаний уже готова')
             except Exception:  # noqa: BLE001 — без библиотеки чат работает без набора банка
                 log.exception('Библиотека компаний не загружена')
             finally:
                 self.library_loading = False
 
         thread = threading.Thread(target=run, daemon=True, name='company-library')
+        self.library_loading = True
         thread.start()
         return thread
 
     def _library(self):
+        if self.library_loading:
+            raise ValueError('Библиотека компаний загружается — поиск заработает через минуту')
+        ready = getattr(self.store, 'ready', None)
         try:
-            self.store.field_labels()
+            ok = ready() if ready else self.store.field_labels() is not None
         except Exception:
-            if self.library_loading:
-                raise ValueError('Библиотека компаний загружается — поиск заработает через минуту') from None
-            raise ValueError('Библиотека профиля не подготовлена: docker compose run --rm profile-prepare --companies-only') from None
+            ok = False
+        if not ok:
+            raise ValueError('Библиотека профиля не подготовлена: docker compose run --rm profile-prepare --companies-only')
 
     def companies(self, query):
         self._library()

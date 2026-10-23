@@ -179,6 +179,8 @@ def main():
     # 0.0.0.0 only inside a container, where compose publishes the port on 127.0.0.1.
     parser.add_argument('--host',default='127.0.0.1')
     args=parser.parse_args()
+    from utils.logging_utils import setup_logging
+    setup_logging()  # library loading and onboarding errors reach `docker compose logs`
     server=create_server(host=args.host,port=args.port)
     server.controller.prepare_library()
     print(f'Откройте http://127.0.0.1:{args.port}/',flush=True)

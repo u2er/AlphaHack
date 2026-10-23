@@ -186,9 +186,11 @@ async def execute(run_id: int) -> None:
                 if outcome.status == "ok":
                     connector.state = outcome.state
         await session.commit()
-    logger.info(
-        "коннектор %s, запуск %s: %s, всего %s, новых %s",
+    logger.log(
+        logging.WARNING if outcome.status == "error" else logging.INFO,
+        "коннектор %s, запуск %s: %s, всего %s, новых %s%s",
         source.name, run_id, outcome.status, outcome.total, new,
+        f" — {outcome.error.strip().splitlines()[-1][:300]}" if outcome.error.strip() else "",
     )
 
 
