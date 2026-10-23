@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import json
 import logging
 import re
@@ -215,23 +217,28 @@ async def process(item: Item, connector: str, cfg: "GraphSettings") -> dict[str,
     ран упал) — повод для паузы: следующая запись, скорее всего, упадёт так же.
 
     До агента новостей запись оценивает аналитик (analyst.py) — для каждого
-    активного профиля клиента (profiles.py): в графе ещё нет этой записи,
-    только прошлые новости. Уже сделанные оценки не повторяются."""
+    активного профиля клиента (profiles.py), параллельно: в графе ещё нет этой
+    записи, только прошлые новости. Уже сделанные оценки не повторяются."""
     files = image_files(item, cfg.item_images) if cfg.item_images > 0 and settings.llm_vision else []
     pictures, events = [name for name, _ in files], await story_events(item)
     clients = [c for c in await profiles.active() if c.wants(connector)]
     if not clients:
         return await _below_threshold(item, connector, None, "ни один клиент не выбрал этот источник", None)
     assessments, fresh, assessed = analyst.by_profile(item.analysis), False, None
-    if analyst.configured():
-        message = None
-        for client in clients:
-            if (assessments.get(client.id) or {}).get("impact"):
-                continue
-            message = message or render(item, connector, _now(), settings.news_item_chars, pictures, events,
-                                        task=analyst.TASK)
-            assessments[client.id], assessed = await analyst.assess(message, item.uid, dict(files), client)
-            fresh = True
+    pending = [c for c in clients if not (assessments.get(c.id) or {}).get("impact")]
+    if analyst.configured() and pending:
+        # Оценки клиентов независимы и в граф не пишут — идут одновременно,
+        # не больше ANALYST_CONCURRENCY ранов сразу.
+        message = render(item, connector, _now(), settings.news_item_chars, pictures, events, task=analyst.TASK)
+        limit = asyncio.Semaphore(max(1, settings.analyst_concurrency))
+
+        async def one(client):
+            async with limit:
+                return await analyst.assess(message, item.uid, dict(files), client)
+
+        for client, (assessment, row) in zip(pending, await asyncio.gather(*(one(c) for c in pending))):
+            assessments[client.id], assessed = assessment, row
+        fresh = True
     analysis = analyst.combine(assessments) if fresh else None
     if reason := analyst.below_all(assessments, [c.id for c in clients], cfg.min_importance):
         return await _below_threshold(item, connector, analysis, reason, assessed)

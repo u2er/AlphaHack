@@ -210,6 +210,23 @@ class GuiTests(unittest.TestCase):
         controller = Controller(Empty(), FakeClient, tempfile.mkdtemp(), embedder=None)
         with self.assertRaisesRegex(ValueError, 'profile-prepare'):
             controller.companies('U_1')
+        controller.library_loading = True  # the GUI loads appendix 1 itself on start
+        with self.assertRaisesRegex(ValueError, 'загружается'):
+            controller.companies('U_1')
+
+    def test_the_company_library_is_loaded_on_start_only_when_missing(self):
+        import profile.db.prepare as prepare
+        calls = []
+        original = prepare.ensure_companies
+        prepare.ensure_companies = lambda dsn=None: calls.append(dsn) or True
+        try:
+            store = FakeStore(); store.dsn = 'postgresql://x'
+            controller = Controller(store, FakeClient, tempfile.mkdtemp(), embedder=None)
+            controller.prepare_library().join(5)
+        finally:
+            prepare.ensure_companies = original
+        self.assertEqual(calls, ['postgresql://x'])
+        self.assertFalse(controller.library_loading)
 
     def test_field_catalog_covers_csv_and_updates_without_changing_data(self):
         root=Path(__file__).resolve().parents[2]

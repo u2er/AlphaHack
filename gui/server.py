@@ -180,6 +180,7 @@ def main():
     parser.add_argument('--host',default='127.0.0.1')
     args=parser.parse_args()
     server=create_server(host=args.host,port=args.port)
+    server.controller.prepare_library()
     print(f'Откройте http://127.0.0.1:{args.port}/',flush=True)
     try:
         server.serve_forever()

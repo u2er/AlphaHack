@@ -93,7 +93,7 @@ async def test_a_new_version_replaces_the_fragments(profile_id):
     assert found["results"] == []
 
 
-async def test_the_seed_snapshot_loads_into_an_empty_graph(monkeypatch):
+async def test_the_seed_snapshot_loads_once(monkeypatch):
     from eventgraph import seed
     from eventgraph.graph import store as store_module
     from eventgraph.graph.store import graph_store
@@ -112,10 +112,11 @@ async def test_the_seed_snapshot_loads_into_an_empty_graph(monkeypatch):
     path = Path(__import__("tempfile").mkdtemp()) / "small.json"
     path.write_text(json.dumps(small), encoding="utf-8")
     try:
-        done = await seed.seed_if_empty(graph, path)
+        done = await seed.seed_graph(graph, path)
         assert done == len(small["nodes"]) + len(small["edges"])
         assert await seed.node_count(graph) == len(small["nodes"])
-        assert await seed.seed_if_empty(graph, path) == 0  # not empty any more
+        assert await seed.seed_graph(graph, path) == 0  # this version is marked as loaded
+        assert (await seed.marker(graph))["elements"] == done
     finally:
         await graph_store.delete_graph(graph)
         await engine.dispose()

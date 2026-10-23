@@ -247,15 +247,21 @@ async function submitForm(button) {
 
 function questionCard(q) {
   const card = el('div', '', 'question-card-chat');
-  let other = null;
+  card.dataset.ref = q.ref || '';
+  let own = null, ownText = null;
   if (q.kind === 'text') { const area = el('textarea'); area.rows = 3; area.id = 'qAnswer'; card.append(area); }
   else {
-    const name = 'q' + session.messages.length;
+    const name = 'q-' + (q.ref || session.messages.length), type = q.kind === 'multi' ? 'checkbox' : 'radio';
     for (const option of q.options.filter(o => o.trim())) {
-      const l = el('label', '', 'choice'); const i = el('input'); i.type = q.kind === 'multi' ? 'checkbox' : 'radio'; i.name = name; i.value = option;
+      const l = el('label', '', 'choice'); const i = el('input'); i.type = type; i.name = name; i.value = option;
       l.append(i, el('span', option)); card.append(l);
     }
-    if (q.allow_other) { other = el('input'); other.placeholder = 'Другое — свой вариант'; other.id = 'qOther'; card.append(other); }
+    // «Своё» есть всегда: и в одиночном, и в множественном выборе.
+    const l = el('label', '', 'choice choice-own'); own = el('input'); own.type = type; own.name = name;
+    ownText = el('input'); ownText.placeholder = 'напишите свой вариант'; ownText.id = 'qOther';
+    ownText.oninput = () => { own.checked = !!ownText.value.trim() || own.checked; };
+    ownText.onfocus = () => { if (type === 'radio') own.checked = true; };
+    l.append(own, el('span', 'Своё:'), ownText); card.append(l);
   }
   const row = el('div', '', 'buttonrow'), send = el('button', 'Ответить'), dunno = el('button', 'Не знаю', 'secondary');
   const submit = async value => {
@@ -265,8 +271,10 @@ function questionCard(q) {
   };
   send.onclick = () => {
     if (q.kind === 'text') return submit($('qAnswer').value);
-    const chosen = [...card.querySelectorAll('input:checked')].map(i => i.value);
-    if (other?.value.trim()) chosen.push(other.value.trim());
+    const chosen = [...card.querySelectorAll('input:checked')].filter(i => i !== own).map(i => i.value);
+    const text = ownText.value.trim();
+    if (own.checked && !text) { ownText.focus(); return notice('Напишите свой вариант или снимите отметку «Своё»', true); }
+    if (own.checked) chosen.push(text);
     submit(q.kind === 'multi' ? chosen : chosen[chosen.length - 1] || '');
   };
   dunno.onclick = () => submit(q.kind === 'multi' ? ['не знаю'] : 'не знаю');
@@ -281,9 +289,14 @@ function renderAll() {
   if (form && session.status !== 'form') { rendered = 0; chat.replaceChildren(); }
   for (const message of session.messages.slice(rendered)) chat.append(bubble(message));
   rendered = session.messages.length;
-  chat.querySelector('.question-card-chat')?.remove();
+  // Карточку вопроса не перерисовываем, пока вопрос тот же: опрос раз в 1,5 с
+  // иначе сбрасывал бы отмеченные варианты и набранный текст.
+  const card = chat.querySelector('.question-card-chat');
+  const same = card && session.question && card.dataset.ref === (session.question.ref || '');
+  if (card && !same) card.remove();
   chat.querySelector('.typing')?.remove();
-  if (session.question) chat.append(questionCard(session.question));
+  if (session.question && !same) chat.append(questionCard(session.question));
+  else if (same && chat.lastElementChild !== card) chat.append(card);  // под новыми сообщениями
   else if (session.status === 'working') { const typing = el('div', '', 'msg msg-activity typing'); typing.append(el('span', '', 'dot-pulse'), el('span', 'Агент работает…')); chat.append(typing); }
   renderFiles();
   renderReview();

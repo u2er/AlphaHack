@@ -65,7 +65,7 @@ class Worker:
 
     async def _seed(self) -> None:
         try:
-            await seed.seed_if_empty()
+            await seed.seed_graph()
         except Exception:  # noqa: BLE001 — без базового графа воркер работает
             logger.exception("базовый граф не загружен")
 

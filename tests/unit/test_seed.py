@@ -28,29 +28,61 @@ def test_the_builtin_snapshot_is_shipped():
     assert len(nodes) > 2000 and len(edges) > 6000
 
 
-async def test_only_an_empty_graph_is_seeded_in_batches(tmp_path, monkeypatch):
+async def test_each_snapshot_version_is_merged_once_in_batches(tmp_path, monkeypatch):
     import json
     path = tmp_path / "snap.json"
     path.write_text(json.dumps(SNAPSHOT), encoding="utf-8")
-    calls = []
+    calls, marks = [], {}
 
     async def import_graph(graph, nodes, edges):
         calls.append((graph, len(nodes), len(edges)))
 
+    async def marker(graph):
+        return marks.get(graph, {})
+
+    async def mark(graph, value):
+        marks[graph] = value
+
+    async def present(graph, names):
+        return 0  # the graph has its own events, none of the snapshot's
+
     monkeypatch.setattr(seed.graph_store, "import_graph", import_graph)
     monkeypatch.setattr(seed, "BATCH", 1)
+    monkeypatch.setattr(seed, "marker", marker)
+    monkeypatch.setattr(seed, "mark", mark)
+    monkeypatch.setattr(seed, "present", present)
 
-    async def full(graph):
-        return 5
-
-    async def empty(graph):
-        return 0
-
-    monkeypatch.setattr(seed, "node_count", full)
-    assert await seed.seed_if_empty("news", path) == 0 and calls == []
-    monkeypatch.setattr(seed, "node_count", empty)
-    assert await seed.seed_if_empty("news", path) == 3
+    assert await seed.seed_graph("news", path) == 3  # merged into a non-empty graph too
     assert calls == [("news", 1, 0), ("news", 1, 0), ("news", 0, 1)]
+    assert await seed.seed_graph("news", path) == 0 and len(calls) == 3  # this version is done
+    path.write_text(json.dumps({**SNAPSHOT, "nodes": SNAPSHOT["nodes"][:1]}), encoding="utf-8")
+    assert await seed.seed_graph("news", path) == 1  # a new version is merged again
+
+
+async def test_a_graph_seeded_before_markers_is_only_marked(tmp_path, monkeypatch):
+    import json
+    path = tmp_path / "snap.json"
+    path.write_text(json.dumps(SNAPSHOT), encoding="utf-8")
+    marks = {}
+
+    async def marker(graph):
+        return {}
+
+    async def mark(graph, value):
+        marks[graph] = value
+
+    async def present(graph, names):
+        return len(names)
+
+    async def import_graph(graph, nodes, edges):
+        raise AssertionError("must not import")
+
+    monkeypatch.setattr(seed.graph_store, "import_graph", import_graph)
+    monkeypatch.setattr(seed, "marker", marker)
+    monkeypatch.setattr(seed, "mark", mark)
+    monkeypatch.setattr(seed, "present", present)
+    assert await seed.seed_graph("news", path) == 0
+    assert marks["news"]["file"] == "snap.json"
 
 
 @pytest.mark.parametrize("value, expected", [("builtin", seed.BUILTIN), ("off", None), ("", None)])

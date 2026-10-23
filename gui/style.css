@@ -237,6 +237,8 @@ summary{font-weight:700;cursor:pointer;color:var(--red-dark)}
 .choice{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:15px}
 .choice:has(input:checked){border-color:var(--ink);background:var(--line-2)}
 .choice input{accent-color:var(--red);margin:0}
+.choice-own span{white-space:nowrap}
+.choice-own input[type=text],.choice-own input:not([type]){flex:1;min-width:0;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:4px 2px;background:transparent}
 
 /* страницы профиля */
 .review{max-width:none}

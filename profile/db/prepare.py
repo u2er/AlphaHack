@@ -21,6 +21,7 @@ from utils.logging_utils import setup_logging
 
 log = logging.getLogger('alfa.profile.prepare')
 DEFAULT_SOURCE = ROOT / 'формулировка и данные хакатона'
+LOCK = 7215031  # pg_advisory_lock: одна подготовка библиотеки за раз
 
 DDL = (
     '''CREATE TABLE profile_data.company_records (
@@ -94,13 +95,16 @@ def validate_document(document, path: Path):
     return pages, document['date_hint'].strip()
 
 
-def prepare(source=DEFAULT_SOURCE, dsn=None, parser_spec=None, replace=False, embedder=None):
+def prepare(source=DEFAULT_SOURCE, dsn=None, parser_spec=None, replace=False, embedder=None, documents=True):
+    """documents=False — только компании приложения 1 (CSV, минута): этого хватает
+    чату онбординга. PDF приложения 2 (OCR и векторы — долго) нужны лишь мастеру CLI:
+    в ленту аналитика банка приходит через коннектор alfa_analytics."""
     source = Path(source)
-    if not parser_spec:
+    if documents and not parser_spec:
         raise ValueError('Specify a document parser with --parser parser.module:function')
-    parser = load_parser(parser_spec)
-    embedder = embedder or SharedEmbedder()
-    dimensions = int(np.asarray(embedder.encode(['probe'])).shape[1])
+    parser = load_parser(parser_spec) if documents else None
+    embedder = (embedder or SharedEmbedder()) if documents else None
+    dimensions = int(np.asarray(embedder.encode(['probe'])).shape[1]) if documents else 0
     with connect(dsn) as connection:
         connection.execute('CREATE EXTENSION IF NOT EXISTS vector')
         existing = connection.execute("SELECT to_regclass('profile_data.companies') AS table_name").fetchone()['table_name']
@@ -110,9 +114,16 @@ def prepare(source=DEFAULT_SOURCE, dsn=None, parser_spec=None, replace=False, em
             connection.execute('DROP SCHEMA profile_data CASCADE')
         connection.execute('CREATE SCHEMA IF NOT EXISTS profile_data')
         for statement in DDL:
+            if not documents and 'profile_data.chunks' in statement:
+                continue
             connection.execute(statement.replace('{dimensions}', str(dimensions)))
         ensure_field_labels(connection)
         import_csv(connection, source / 'приложение 1')
+        if not documents:
+            executemany(connection, 'INSERT INTO profile_data.metadata VALUES (%s,%s)',
+                        [('scope', 'companies'), ('schema_version', '3')])
+            log.info('Готово: компании приложения 1 загружены, документы пропущены')
+            return {'documents': 0, 'chunks': 0}
         pdfs = sorted((source / 'приложение 2').glob('*.pdf'))
         if not pdfs:
             raise ValueError('No analytical PDF documents found')
@@ -155,9 +166,28 @@ def main():
     command.add_argument('--dsn', help='PostgreSQL DSN; defaults to PROFILE_DATABASE_URL, then DATABASE_URL')
     command.add_argument('--parser', default='parser.pdf:parse_document', help='parser.module:function')
     command.add_argument('--replace', action='store_true', help='Replace only profile_data in one transaction')
+    command.add_argument('--companies-only', action='store_true',
+                         help='Only appendix 1 (CSV): enough for the onboarding chat, no OCR')
     args = command.parse_args()
     setup_logging()
-    print(prepare(args.source, args.dsn, args.parser, args.replace))
+    print(prepare(args.source, args.dsn, args.parser, args.replace, documents=not args.companies_only))
+
+
+def ensure_companies(dsn=None, source=DEFAULT_SOURCE) -> bool:
+    """Загрузить компании приложения 1, если библиотеки ещё нет. Несколько
+    процессов не делают это дважды: advisory-блокировка. True — загрузили сейчас."""
+    with connect(dsn) as connection:
+        connection.execute('SELECT pg_advisory_lock(%s)', (LOCK,))
+        try:
+            if connection.execute("SELECT to_regclass('profile_data.companies') AS t").fetchone()['t']:
+                return False
+            if not (Path(source) / 'приложение 1' / 'df_Uid_data_hack.csv').is_file():
+                log.warning('Библиотека профиля не подготовлена: нет CSV приложения 1 в %s', source)
+                return False
+            prepare(source, dsn, documents=False)
+            return True
+        finally:
+            connection.execute('SELECT pg_advisory_unlock(%s)', (LOCK,))
 
 
 if __name__ == '__main__':

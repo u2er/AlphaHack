@@ -290,6 +290,31 @@ async def test_each_client_gets_its_own_assessment_with_its_own_profile(world, m
     assert {pid: a["importance"] for pid, a in analysis["profiles"].items()} == {"steel": 1, "food": 4}
 
 
+async def test_clients_are_assessed_at_once_within_the_concurrency_limit(world, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(settings, "agents", "news,analyst")
+    monkeypatch.setattr(settings, "analyst_concurrency", 2)
+    world["clients"] = clients("a", "b", "c", "d", "e")
+    world["replies"] += [done()]
+    running, peak = set(), []
+
+    async def assess(message, uid, attachments, profile=None):
+        running.add(profile.id)
+        peak.append(len(running))
+        await asyncio.sleep(0.01 if profile.id != "a" else 0.03)  # a finishes last: results keep their client
+        running.discard(profile.id)
+        return {"importance": ord(profile.id) - ord("a"), "impact": f"для {profile.id}", "run_id": 1}, None
+
+    monkeypatch.setattr(news.analyst, "assess", assess)
+    await news.process(world["item"], "ria", GraphSettings())
+
+    assert max(peak) == 2
+    profiles_ = world["stored"]["analysis"]["profiles"]
+    assert {pid: a["impact"] for pid, a in profiles_.items()} == {c: f"для {c}" for c in "abcde"}
+    assert world["stored"]["analysis"]["profile_id"] == "e"
+
+
 async def test_a_record_important_to_one_client_reaches_the_shared_graph(world, monkeypatch):
     monkeypatch.setattr(settings, "agents", "news,analyst")
     world["clients"] = clients("steel", "food")

@@ -1,6 +1,9 @@
 services:
   api:
     build: .
+    # `docker compose up` всегда пересобирает образ (кеш слоёв — секунды):
+    # без этого на сервере остаётся старый образ от прошлого развёртывания.
+    pull_policy: build
     container_name: eventgraph
     restart: unless-stopped
     command: ["./entrypoint.sh", "api"]
@@ -29,6 +32,7 @@ services:
 
   worker:
     build: .
+    pull_policy: build
     container_name: eventgraph-worker
     restart: unless-stopped
     command: ["./entrypoint.sh", "worker"]
@@ -49,6 +53,7 @@ services:
   profile-gui:
     # Мастер профиля компании: выбор компании, ответы, темы, экспорт в /profiles.
     build: .
+    pull_policy: build
     container_name: eventgraph-profile-gui
     restart: unless-stopped
     command: ["./entrypoint.sh", "profile-gui"]
@@ -78,6 +83,7 @@ services:
     #   docker compose run --rm profile-prepare            (первый раз)
     #   docker compose run --rm profile-prepare --replace  (пересборка)
     build: .
+    pull_policy: build
     profiles: ["setup"]
     command: ["./entrypoint.sh", "profile-prepare"]
     user: "${EVENTGRAPH_UID:-1000}:${EVENTGRAPH_GID:-1000}"

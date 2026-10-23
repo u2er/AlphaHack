@@ -9,7 +9,12 @@
 ```bash
 docker compose run --rm profile-prepare            # первый раз
 docker compose run --rm profile-prepare --replace  # пересборка
+docker compose run --rm profile-prepare --companies-only  # только CSV приложения 1
 ```
+
+Компании приложения 1 интерфейс загружает сам при старте, если схемы
+`profile_data` нет (`ensure_companies`, под advisory-блокировкой) — этого хватает
+чату онбординга. PDF приложения 2 нужны только мастеру CLI.
 
 С хоста — к базе из compose (порт `DB_PORT`, по умолчанию 5433, только на 127.0.0.1):
 

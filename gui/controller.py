@@ -28,13 +28,33 @@ class Controller:
         self.runs_dir = Path(runs_dir)
         self.sessions: dict[str, Onboarding] = {}
         self.lock = threading.RLock()
+        self.library_loading = False
+
+    def prepare_library(self):
+        """A fresh deployment has no company library: load appendix 1 in the background."""
+        from profile.db.prepare import ensure_companies
+
+        def run():
+            self.library_loading = True
+            try:
+                if ensure_companies(self.store.dsn):
+                    log.info('Библиотека компаний приложения 1 загружена')
+            except Exception:  # noqa: BLE001 — без библиотеки чат работает без набора банка
+                log.exception('Библиотека компаний не загружена')
+            finally:
+                self.library_loading = False
+
+        thread = threading.Thread(target=run, daemon=True, name='company-library')
+        thread.start()
+        return thread
 
     def _library(self):
-        """A fresh deployment has no profile library until profile-prepare runs."""
         try:
             self.store.field_labels()
         except Exception:
-            raise ValueError('Библиотека профиля ещё не подготовлена: запустите docker compose run --rm profile-prepare') from None
+            if self.library_loading:
+                raise ValueError('Библиотека компаний загружается — поиск заработает через минуту') from None
+            raise ValueError('Библиотека профиля не подготовлена: docker compose run --rm profile-prepare --companies-only') from None
 
     def companies(self, query):
         self._library()
