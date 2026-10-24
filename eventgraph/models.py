@@ -168,6 +168,35 @@ class ProfileChunk(Base):
     tsv: Mapped[Any] = mapped_column(TSVECTOR, Computed("to_tsvector('russian', coalesce(text, ''))", persisted=True))
 
 
+class AISummary(Base):
+    __tablename__ = "ai_summaries"
+    __table_args__ = (UniqueConstraint("profile_id", "min_importance", "direction", name="uq_ai_summaries_filter"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("company_profiles.id", ondelete="CASCADE"), index=True)
+    min_importance: Mapped[int] = mapped_column(Integer)
+    direction: Mapped[str] = mapped_column(String(20), default="")
+    content: Mapped[str] = mapped_column(Text)
+    source_uids: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AIChat(Base):
+    __tablename__ = "ai_chats"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "item_uid", name="uq_ai_chats_profile_item"),
+        Index("ix_ai_chats_updated_at", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("company_profiles.id", ondelete="CASCADE"), index=True)
+    item_uid: Mapped[str] = mapped_column(String(32), index=True)
+    messages: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 # ── обслуживание графа ──────────────────────────────────────────────────────
 
 

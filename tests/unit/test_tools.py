@@ -42,8 +42,35 @@ UPKEEP = {"graph_duplicates", "graph_merge", "graph_not_duplicates", "graph_doub
 def test_tools_follow_the_rights():
     assert names("reader") == READ
     assert names("news") == READ | WRITE
+    assert names("graph_chat") == READ | {"graph_overview"}
     assert names("news", {"01A-0.jpg": "items/a.jpg"}) == READ | WRITE | {"view_image"}
     assert names("gardener") == READ | WRITE | {"graph_delete"} | UPKEEP
+
+
+def test_graph_overview_sorts_events_counts_event_links_and_reports_relations():
+    dump = {
+        "graph": "news",
+        "nodes": [
+            {"id": "event-old", "name": "Старое событие", "meta": {"type": "event", "date": "2026-10-10", "importance": 3}},
+            {"id": "event-new", "name": "Новое событие", "meta": {"type": "event", "date": "2026-10-20", "importance": 4}},
+            {"id": "org", "name": "Организация", "meta": {"type": "org"}},
+            {"id": "person", "name": "Участник", "meta": {"type": "person"}},
+        ],
+        "edges": [
+            {"source_id": "event-old", "target_id": "org", "name": "involves"},
+            {"source_id": "event-new", "target_id": "org", "name": "involves"},
+            {"source_id": "event-new", "target_id": "person", "name": "involves"},
+            {"source_id": "event-old", "target_id": "event-new", "name": "contradicts"},
+        ],
+    }
+
+    overview = agent_tools.graph_overview_data(dump)
+
+    assert [event["name"] for event in overview["latest_events"]] == ["Новое событие", "Старое событие"]
+    assert overview["most_connected_nodes"][0]["name"] == "Организация"
+    assert overview["most_connected_nodes"][0]["events_count"] == 2
+    assert overview["story_relations"][0]["relation"] == "contradicts"
+    assert overview["counts"] == {"nodes": 4, "edges": 4, "events": 2}
 
 
 def test_system_text_does_not_lie_about_writing():

@@ -92,6 +92,11 @@ class OnboardingTests(unittest.TestCase):
             session.edit_page('products', content='Молоко, сыры и десерты.')
             self.assertEqual(session.document.page('products').origin, 'user')
             published = []
+            def fail_publish(_payload):
+                raise RuntimeError('EventGraph unavailable')
+            with self.assertRaisesRegex(RuntimeError, 'EventGraph unavailable'):
+                session.confirm(fail_publish)
+            self.assertEqual(session.status, 'review')
             result = session.confirm(lambda payload: published.append(payload) or Path(tmp)/'shared.json')
             self.assertEqual(result['profile']['schema_version'], '2')
             self.assertEqual(load_profile(published[0]).page('products').content, 'Молоко, сыры и десерты.')

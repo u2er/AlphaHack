@@ -89,6 +89,14 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'feed':
                 importance = min(max(int(query.get('min_importance',['1'])[0]),0),5)
                 return self.json(200,{'items':insights.feed(parts[1],importance)})
+            if len(parts) == 2 and parts[0] == 'summaries':
+                summary = insights.summary(parts[1], int(query.get('min_importance',['3'])[0]),
+                                           query.get('direction',[''])[0])
+                return self.json(200,{'summary': summary})
+            if len(parts) == 2 and parts[0] == 'chats':
+                return self.json(200,{'chats':insights.chats(parts[1])})
+            if len(parts) == 3 and parts[0] == 'chats':
+                return self.json(200,insights.chat(parts[1],parts[2]))
             if len(parts) == 4 and parts[0] == 'profiles' and parts[2] == 'pages':
                 return self.json(200,insights.page(parts[1],parts[3],int(query.get('offset',['0'])[0])))
             if parts == ['connectors']:
@@ -125,9 +133,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(200,insights.connector_action(parts[1],parts[2]))
             if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'sources':
                 return self.json(200,insights.set_sources(parts[1],body.get('sources') or []))
+            if len(parts) == 2 and parts[0] == 'summaries':
+                return self.json(200,insights.create_summary(
+                    parts[1], int(body.get('min_importance',3)), str(body.get('direction') or '')))
+            if len(parts) == 3 and parts[0] == 'chats':
+                return self.json(200,insights.send_chat(parts[1],parts[2],str(body.get('message') or '')))
+            if parts == ['graph-chat']:
+                return self.json(200,insights.graph_chat(str(body.get('message') or ''), body.get('history') or []))
+            if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'edit-proposal':
+                return self.json(200,insights.profile_edit_proposal(parts[1],str(body.get('instruction') or '')))
+            if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'save':
+                return self.json(200,insights.save_profile(parts[1],body.get('profile') or {}))
         except InsightsError as exc:
             return self.error_json(502,str(exc))
         return self.error_json(404,'Не найдено')
+
+    def _publish_profile(self, payload):
+        path = self.server.controller.publish(payload)
+        insights = self.server.insights
+        if insights.api_key:
+            insights.publish_profile(payload)
+        return path
 
     def do_POST(self):
         try:
@@ -148,14 +174,14 @@ class Handler(BaseHTTPRequestHandler):
             elif action == 'answer' and len(parts) == 4: result = session.answer(body.get('value'))
             elif action == 'pages' and len(parts) == 5:
                 result = session.edit_page(parts[4],body.get('title'),body.get('summary'),body.get('content'))
-            elif action == 'confirm' and len(parts) == 4: result = session.confirm(controller.publish)
+            elif action == 'confirm' and len(parts) == 4: result = session.confirm(self._publish_profile)
             elif action == 'sources' and len(parts) == 4:
                 known = {c['name']:(c.get('description') or c['name']).split(' — ')[0]
                          for c in self.server.insights.connectors() if c.get('enabled')}
                 chosen = [str(name) for name in body.get('sources') or []]
                 if any(name not in known for name in chosen):
                     raise ValueError('Нет таких источников: ' + ', '.join(n for n in chosen if n not in known))
-                result = session.set_sources(chosen,controller.publish,known)
+                result = session.set_sources(chosen,self._publish_profile,known)
             else: return self.error_json(404,'Не найдено')
             self.json(200,result)
         except KeyError as exc:

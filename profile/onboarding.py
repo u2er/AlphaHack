@@ -522,10 +522,11 @@ class Onboarding:
             if self.status != 'review' or self.document is None:
                 raise ValueError('Профиль ещё не готов или уже подтверждён')
             payload = self.document.model_dump(mode='json')
-            self.status, self.confirmed = 'confirmed', True
         path = self.run_dir / 'profile.json'
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
         shared = publish(payload) if publish else None
+        with self.lock:
+            self.status, self.confirmed = 'confirmed', True
         if self.trace:
             self.trace.record('profile_confirmed', profile_id=payload['profile_id'], published=str(shared) if shared else None)
         self.say('agent', 'text', 'Профиль подтверждён и передан в бизнес‑аналитику. Новые новости будут оцениваться '

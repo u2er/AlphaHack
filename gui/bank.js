@@ -12,6 +12,18 @@ const TREND = { new: 'новое', continues: 'продолжается', escala
 const ROLES = { competitor: 'конкурент', partner: 'партнёр', client: 'клиент', supplier: 'поставщик', regulator: 'регулятор', other: 'участник' };
 
 let profiles = [], current = null, items = [], selected = null, direction = '';
+let profilesLoaded = false;
+let currentSummary = null, summaryLoading = false;
+let activeChatUid = '', chatArticle = null, chatMessages = [], chatSending = false;
+let chatPendingMessage = '', chatStatus = '', chatStatusTimer = null;
+let chatGeneration = 0;
+let profileEditProposal = null, profileEditBusy = false;
+function resetChatView() {
+  chatGeneration++;
+  clearInterval(chatStatusTimer); chatStatusTimer = null;
+  activeChatUid = ''; chatArticle = null; chatMessages = [];
+  chatPendingMessage = ''; chatStatus = ''; chatSending = false;
+}
 // Коннектор → название источника для людей («Lenta.ru», «Аналитика Альфа-Банка»).
 let sourceNames = {}, sourceList = [];
 const outlet = item => sourceNames[item.connector] || item.connector || '';
@@ -57,11 +69,19 @@ async function loadProfiles() {
   try {
     profiles = (await api('/api/insights/profiles')).profiles;
   } catch (error) {
+    profilesLoaded = true;
     select.replaceChildren(el('option', 'Аналитика недоступна'));
-    notice(error.message, true); profiles = []; renderEmpty(error.message); return;
+    notice(error.message, true); profiles = []; renderEmpty(error.message);
+    if (!$('view-profile').hidden) renderProfilePage();
+    return;
   }
+  profilesLoaded = true;
   select.replaceChildren();
-  if (!profiles.length) { select.append(el('option', 'Нет профилей')); renderEmpty(); return; }
+  if (!profiles.length) {
+    select.append(el('option', 'Нет профилей')); renderEmpty();
+    if (!$('view-profile').hidden) renderProfilePage();
+    return;
+  }
   for (const p of profiles) { const o = el('option', p.name || p.id); o.value = p.id; select.append(o); }
   const saved = store.get('alfa-client');
   select.value = profiles.some(p => p.id === saved) ? saved : profiles[0].id;
@@ -69,7 +89,8 @@ async function loadProfiles() {
 }
 
 async function selectClient(id) {
-  store.set('alfa-client', id); selected = null;
+  store.set('alfa-client', id); selected = null; currentSummary = null;
+  resetChatView(); profileEditProposal = null;
   try { current = await api(`/api/insights/profiles/${encodeURIComponent(id)}`); }
   catch (error) { notice(error.message, true); return; }
   renderProfileHeader();
@@ -79,6 +100,11 @@ async function selectClient(id) {
 
 function renderProfilePage() {
   const box = $('profilePager');
+  if (!profilesLoaded) {
+    box.replaceChildren(el('div', 'Загружаем профиль компании…', 'panel empty'));
+    return;
+  }
+  renderProfileAIEditor();
   if (!current) {
     const empty = el('div', '', 'panel empty');
     empty.append(el('h3', 'Профилей пока нет'), el('p', 'Добавьте компанию — анкета, документы и пара вопросов.'));
@@ -111,17 +137,19 @@ async function loadFeed(force = false) {
   if (!current) return;
   if (loading && !force) return loading;
   const importance = $('importanceFilter').value;
+  $('feed').setAttribute('aria-busy', 'true');
   $('feed').replaceChildren(el('div', '', 'skeleton'), el('div', '', 'skeleton'));
   loading = api(`/api/insights/profiles/${encodeURIComponent(current.id)}/feed?min_importance=${importance}`)
-    .then(data => { items = data.items; renderFeed(); renderHome(); })
+    .then(async data => { items = data.items; renderFeed(); renderHome(); await loadSavedSummary(); })
     .catch(error => { notice(error.message, true); items = []; renderFeed(error.message); renderHome(); })
     .finally(() => loading = null);
   return loading;
 }
 
 function dots(n) {
-  const box = el('span', '', 'dots'); box.title = `Важность ${n} из 5`;
-  for (let i = 1; i <= 5; i++) box.append(el('i', '', i <= n ? 'f' : ''));
+  const level = Math.min(4, Math.max(1, Number(n) || 1));
+  const box = el('span', String(level), `importance-badge importance-${level}`);
+  box.title = `Важность ${level} из 4`;
   return box;
 }
 const titleOf = item => item.analysis.headline || item.title || item.event || 'Событие';
@@ -138,7 +166,13 @@ function card(item) {
   foot.append(el('span', [dateOf(item), outlet(item)].filter(Boolean).join(' · ')));
   if (item.bank?.length) foot.append(el('span', 'Альфа‑Банк', 'who who-bank'));
   b.append(foot);
-  b.onclick = () => { selected = item.uid; renderFeed(); };
+  b.onclick = () => {
+    if (activeChatUid) {
+      resetChatView();
+      selected = item.uid;
+    } else selected = selected === item.uid ? null : item.uid;
+    renderFeed();
+  };
   return b;
 }
 
@@ -151,6 +185,7 @@ function renderEmpty(message) {
     box.append(el('h3', 'Расскажите о компании'), el('p', 'Лента подбирается под профиль: заполните его — и новости начнут оцениваться для вашего бизнеса.'));
     const link = el('a', 'Добавить компанию', 'button-link'); link.href = '#/onboarding'; box.append(link);
   }
+  $('feed').setAttribute('aria-busy', 'false');
   $('feed').replaceChildren(box); $('detail').replaceChildren();
   $('entryList').replaceChildren(el('div', message || 'Создайте профиль компании, чтобы получить персональную ленту.', 'mini'));
 }
@@ -158,14 +193,20 @@ function renderEmpty(message) {
 function renderFeed(error) {
   if (error) return renderEmpty(error);
   const list = visible(), feed = $('feed');
+  feed.setAttribute('aria-busy', 'false');
+  if (activeChatUid && chatArticle) {
+    feed.replaceChildren(...list.map(card));
+    return renderChat(chatArticle);
+  }
   if (!list.length) {
     const box = el('div', '', 'panel empty');
     box.append(el('h3', 'Пока нет важных событий'), el('p', items.length ? 'Измените фильтр направления.' : 'Новости оцениваются по мере поступления. Понизьте порог важности или загляните позже.'));
-    feed.replaceChildren(box); $('detail').replaceChildren(); return;
+    feed.replaceChildren(box); renderOverview(); return;
   }
-  if (!list.some(i => i.uid === selected)) selected = list[0].uid;
+  if (!list.some(i => i.uid === selected)) selected = null;
   feed.replaceChildren(...list.map(card));
-  renderDetail(list.find(i => i.uid === selected));
+  if (selected) renderDetail(list.find(i => i.uid === selected));
+  else renderOverview();
 }
 
 function block(title, who, ...children) {
@@ -175,6 +216,8 @@ function block(title, who, ...children) {
 }
 
 function renderDetail(item) {
+  if (!item) return;
+  if (activeChatUid === item.uid && chatArticle) return renderChat(item);
   const a = item.analysis, d = $('detail'); d.replaceChildren(); d.scrollTop = 0;
   const meta = el('div', '', 'card-top');
   if (a.direction) meta.append(el('span', DIRECTION[a.direction] || a.direction, `chip ${a.direction}`));
@@ -183,7 +226,8 @@ function renderDetail(item) {
   for (const area of a.areas || []) meta.append(el('span', area, 'chip'));
   d.append(el('div', [dateOf(item), outlet(item)].filter(Boolean).join(' · '), 'muted'), el('h2', titleOf(item)), meta);
 
-  const meter = el('div', '', 'meter'); meter.append(el('b', `${a.importance}/5`));
+  const importance = Math.min(4, Number(a.importance) || 0);
+  const meter = el('div', '', 'meter'); meter.append(el('b', `${importance}/4`));
   meter.append(el('span', `Важность для ${current?.name || 'компании'}${a.confidence != null ? ` · уверенность оценки ${Math.round(a.confidence * 100)}%` : ''}`));
   d.append(meter);
 
@@ -216,7 +260,233 @@ function renderDetail(item) {
   else src.push(el('p', item.title || '—'));
   if (item.event) src.push(el('p', `Событие в графе: ${item.event}`, 'muted'));
   d.append(block('Первоисточник', ['Источник', 'who-src'], ...src));
-  d.append(el('div', `Запись ${item.uid}${a.run_id ? ` · ран аналитика #${a.run_id}` : ''} — ход рассуждений в EventGraph: GET /agent-runs/${a.run_id || '…'}`, 'trace'));
+  const actions = el('div', '', 'ai-actions');
+  const discuss = el('button', 'Обсудить с ИИ', 'button-violet');
+  discuss.onclick = () => openChat(item);
+  actions.append(discuss); d.append(actions);
+  d.append(el('div', `Запись ${item.uid}${a.run_id ? ` · ран аналитики #${a.run_id}` : ''} — ход рассуждений в EventGraph: GET /agent-runs/${a.run_id || '…'}`, 'trace'));
+}
+
+function summaryFilters() {
+  return { min_importance: Number($('importanceFilter').value), direction };
+}
+
+function renderOverview() {
+  const detail = $('detail');
+  detail.replaceChildren();
+  if (currentSummary) {
+    const section = el('section', '', 'summary-section');
+    const head = el('div', '', 'summary-head');
+    head.append(el('h3', 'Сводка по новостям · ИИ'));
+    head.append(el('span', `${currentSummary.source_uids?.length || 0} новостей`, 'muted'));
+    section.append(head);
+    const markdown = window.Alfa.markdown(currentSummary.content);
+    markdown.classList.add('summary-content');
+    section.append(markdown);
+    if (currentSummary.updated_at) section.append(el('div',
+      `Обновлено ${new Date(currentSummary.updated_at).toLocaleString('ru-RU')}`, 'summary-meta'));
+    detail.append(section);
+    return;
+  }
+  if (summaryLoading) {
+    detail.append(el('div', 'Формирую сводку по новостям и выбранным фильтрам…', 'panel empty'));
+    return;
+  }
+  detail.append(el('div', 'Выберите конкретную новость или суммаризируйте через ИИ.', 'panel empty'));
+}
+
+async function loadSavedSummary() {
+  if (!current) return;
+  const filters = summaryFilters();
+  const key = `${current.id}:${filters.min_importance}:${filters.direction}`;
+  try {
+    const data = await api(`/api/insights/summaries/${encodeURIComponent(current.id)}?min_importance=${filters.min_importance}&direction=${encodeURIComponent(filters.direction)}`);
+    const latest = summaryFilters();
+    if (`${current?.id}:${latest.min_importance}:${latest.direction}` !== key) return;
+    currentSummary = data.summary;
+    if (!activeChatUid && !selected) renderOverview();
+  } catch (error) { notice(error.message, true); }
+}
+
+async function createSummary() {
+  if (!current || summaryLoading) return;
+  const button = $('summarizeButton'), filters = summaryFilters();
+  selected = null;
+  summaryLoading = true; button.disabled = true; button.textContent = 'Суммирую…';
+  renderFeed();
+  try {
+    currentSummary = await post(`/api/insights/summaries/${encodeURIComponent(current.id)}`, filters);
+    if (!activeChatUid && !selected) renderOverview();
+    notice(`Сводка готова: ${currentSummary.source_uids.length} новостей`);
+  } catch (error) { notice(error.message, true); }
+  finally { summaryLoading = false; button.disabled = false; button.textContent = 'Суммаризировать с помощью ИИ'; }
+}
+
+function renderChat(item) {
+  const detail = $('detail'); detail.replaceChildren();
+  const header = el('div', '', 'chat-news-header');
+  header.append(el('span', 'Обсуждение новости', 'eyebrow'), el('h2', titleOf(item)));
+  const restore = el('button', 'Вернуться к новости', 'secondary');
+  restore.onclick = () => { resetChatView(); renderDetail(item); };
+  header.append(restore); detail.append(header);
+  const messages = el('div', '', 'news-chat-messages');
+  for (const message of chatMessages) {
+    const row = el('div', '', `news-chat-message ${message.role === 'user' ? 'user' : 'assistant'}`);
+    row.append(el('b', message.role === 'user' ? 'Вы' : 'ИИ'));
+    row.append(message.role === 'assistant' ? window.Alfa.markdown(message.content || '') : el('p', message.content || ''));
+    messages.append(row);
+  }
+  if (chatPendingMessage) {
+    const row = el('div', '', 'news-chat-message user pending');
+    row.append(el('b', 'Вы'), el('p', chatPendingMessage));
+    messages.append(row);
+  }
+  if (chatSending) {
+    const status = el('div', '', 'agent-working');
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.append(el('span', '', 'spinner'), el('span', chatStatus, 'agent-status'));
+    messages.append(status);
+  }
+  if (!chatMessages.length && !chatPendingMessage) messages.append(el('p', 'Задайте вопрос об этой новости. Агент учитывает её текст, профиль компании и связанные публикации.', 'muted'));
+  detail.append(messages);
+  const scrollToLatest = () => {
+    if (!messages.isConnected) return;
+    messages.scrollTop = messages.scrollHeight;
+    detail.scrollTop = detail.scrollHeight;
+  };
+  requestAnimationFrame(scrollToLatest);
+  setTimeout(scrollToLatest, 350);
+  const form = el('form', '', 'news-chat-form'), input = el('textarea');
+  input.rows = 3; input.maxLength = 4000; input.placeholder = 'Напишите сообщение…'; input.required = true;
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  const send = el('button', chatSending ? 'Отправляю…' : 'Отправить');
+  send.disabled = chatSending;
+  form.append(input, send);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const message = input.value.trim();
+    if (!message || chatSending) return;
+    const generation = chatGeneration, profileId = current.id;
+    chatPendingMessage = message;
+    chatSending = true;
+    const statuses = [
+      'Читаю новость и профиль компании…',
+      'Сопоставляю новость со связанными событиями…',
+      'Готовлю краткий ответ…',
+    ];
+    let statusIndex = 0;
+    chatStatus = statuses[statusIndex];
+    renderChat(item);
+    clearInterval(chatStatusTimer);
+    chatStatusTimer = setInterval(() => {
+      if (generation !== chatGeneration) return;
+      chatStatus = statuses[++statusIndex % statuses.length];
+      const statusElement = $('detail').querySelector('.agent-status');
+      if (statusElement) statusElement.textContent = chatStatus;
+    }, 3500);
+    try {
+      const data = await post(`/api/insights/chats/${encodeURIComponent(profileId)}/${encodeURIComponent(item.uid)}`, { message });
+      if (generation !== chatGeneration) return;
+      chatMessages = data.messages || [];
+    } catch (error) { if (generation === chatGeneration) notice(error.message, true); }
+    finally {
+      if (generation !== chatGeneration) return;
+      clearInterval(chatStatusTimer); chatStatusTimer = null;
+      chatPendingMessage = ''; chatStatus = ''; chatSending = false; renderChat(item);
+    }
+  };
+  detail.append(form);
+}
+
+async function openChat(item) {
+  resetChatView();
+  const generation = chatGeneration, profileId = current.id;
+  activeChatUid = item.uid; chatArticle = item; chatMessages = [];
+  renderChat(item);
+  try {
+    const data = await api(`/api/insights/chats/${encodeURIComponent(profileId)}/${encodeURIComponent(item.uid)}`);
+    if (generation !== chatGeneration) return;
+    chatMessages = data.messages || []; chatArticle = data.article || item; renderChat(chatArticle);
+  } catch (error) {
+    if (generation === chatGeneration) {
+      activeChatUid = ''; chatArticle = null; renderDetail(item); notice(error.message, true);
+    }
+  }
+}
+
+async function openChatHistory() {
+  try {
+    const data = await api(`/api/insights/chats/${encodeURIComponent(current.id)}`);
+    const list = $('chatHistoryList'); list.className = 'chat-history-list'; list.replaceChildren();
+    if (!data.chats?.length) list.append(el('p', 'Сохранённых обсуждений пока нет.', 'muted'));
+    for (const chat of data.chats || []) {
+      const button = el('button', '', 'chat-history-item');
+      button.append(el('b', chat.title), el('small', `${chat.message_count} сообщений · ${new Date(chat.updated_at).toLocaleString('ru-RU')}`));
+      button.onclick = async () => {
+        $('chatHistoryDialog').close();
+        resetChatView();
+        const generation = chatGeneration, profileId = current.id;
+        activeChatUid = chat.item_uid;
+        chatArticle = chat.article; renderChat(chatArticle);
+        try {
+          const result = await api(`/api/insights/chats/${encodeURIComponent(profileId)}/${encodeURIComponent(chat.item_uid)}`);
+          if (generation !== chatGeneration) return;
+          chatArticle = result.article; chatMessages = result.messages || []; renderChat(chatArticle);
+        } catch (error) { if (generation === chatGeneration) notice(error.message, true); }
+      };
+      list.append(button);
+    }
+    $('chatHistoryDialog').showModal();
+  } catch (error) { notice(error.message, true); }
+}
+
+function renderProfileAIEditor() {
+  const box = $('profileAIEditor');
+  if (!box) return;
+  box.replaceChildren(el('h2', 'Изменить профиль с помощью ИИ'));
+  if (!current) { box.append(el('p', 'Сначала выберите или создайте профиль компании.', 'muted')); return; }
+  if (profileEditProposal) {
+    box.append(el('p', 'Проверьте черновик. Изменения будут сохранены только после подтверждения.', 'muted'));
+    const before = el('section', '', 'profile-edit-preview');
+    before.append(el('h3', 'Текущий профиль'), el('pre', profileEditProposal.original.pages.map(p => `${p.title}\n${p.content}`).join('\n\n')));
+    const after = el('section', '', 'profile-edit-preview');
+    after.append(el('h3', 'Предложенный профиль'), el('pre', profileEditProposal.profile.pages.map(p => `${p.title}\n${p.content}`).join('\n\n')));
+    box.append(before, after);
+    const actions = el('div', '', 'dialog-actions');
+    const cancel = el('button', 'Отменить', 'secondary'); cancel.onclick = () => { profileEditProposal = null; renderProfileAIEditor(); };
+    const save = el('button', profileEditBusy ? 'Сохраняю…' : 'Подтвердить и сохранить');
+    save.disabled = profileEditBusy;
+    save.onclick = async () => {
+      profileEditBusy = true; renderProfileAIEditor();
+      try {
+        await post(`/api/insights/profiles/${encodeURIComponent(current.id)}/save`, { profile: profileEditProposal.profile });
+        profileEditProposal = null; await selectClient(current.id); notice('Профиль обновлён');
+      } catch (error) { notice(error.message, true); }
+      finally { profileEditBusy = false; renderProfileAIEditor(); }
+    };
+    actions.append(cancel, save); box.append(actions); return;
+  }
+  const form = el('form', '', 'profile-ai-form');
+  const instruction = el('textarea'); instruction.rows = 3; instruction.maxLength = 4000;
+  instruction.placeholder = 'Опишите, что нужно изменить в профиле'; instruction.required = true;
+  const submit = el('button', profileEditBusy ? 'Готовлю черновик…' : 'Предложить изменения');
+  submit.disabled = profileEditBusy; form.append(instruction, submit);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    profileEditBusy = true; renderProfileAIEditor();
+    try {
+      profileEditProposal = await post(`/api/insights/profiles/${encodeURIComponent(current.id)}/edit-proposal`, { instruction: instruction.value.trim() });
+      renderProfileAIEditor();
+    } catch (error) { notice(error.message, true); }
+    finally { profileEditBusy = false; renderProfileAIEditor(); }
+  };
+  box.append(form);
 }
 
 // ── главная ─────────────────────────────────────────────────────────────────
@@ -305,7 +575,13 @@ const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one : n %
 
 // ── события ─────────────────────────────────────────────────────────────────
 $('clientSelect').onchange = e => selectClient(e.target.value);
-$('importanceFilter').onchange = () => loadFeed(true);
+$('importanceFilter').onchange = () => {
+  for (const button of $('importanceButtons').children)
+    button.classList.toggle('on', button.dataset.importance === $('importanceFilter').value);
+  currentSummary = null;
+  if (current && !selected && !activeChatUid) renderOverview();
+  loadFeed(true);
+};
 // ── источники: коннекторы и выбор компании ─────────────────────────────────
 let tab = 'feed', connectors = [], sourcesTimer = null;
 const STATUS = { ok: 'успешно', error: 'ошибка', timeout: 'таймаут', running: 'идёт', '': 'ещё не запускался' };
@@ -447,8 +723,20 @@ $('directionFilter').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   direction = b.dataset.direction;
   for (const x of $('directionFilter').children) x.classList.toggle('on', x === b);
+  currentSummary = null;
   renderFeed();
+  loadSavedSummary();
 };
+$('importanceButtons').onclick = e => {
+  const button = e.target.closest('button[data-importance]');
+  if (!button) return;
+  $('importanceFilter').value = button.dataset.importance;
+  $('importanceFilter').dispatchEvent(new Event('change'));
+};
+$('importanceFilter').dispatchEvent(new Event('change'));
+$('summarizeButton').onclick = createSummary;
+$('chatHistoryButton').onclick = () => { if (current) openChatHistory(); };
+$('chatHistoryClose').onclick = () => $('chatHistoryDialog').close();
 $('burger').onclick = () => $('sidebar').classList.toggle('open');
 window.addEventListener('hashchange', route);
 // Экспорт мастера профиля: EventGraph подхватывает файл перед разбором — обновим список компаний.

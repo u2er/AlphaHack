@@ -20,7 +20,6 @@
       <a href="#/profile"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Профиль компании</span></a>
       <a href="#/onboarding"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></svg><span>Добавить компанию</span></a>
     </nav>
-    <p class="sidebar-note">Прототип для хакатона: бизнес‑аналитика и профиль компании работают на реальных данных стенда.</p>
   </aside>
 
   <div class="main">
@@ -31,7 +30,6 @@
         <select id="clientSelect" aria-label="Компания"><option value="">Загрузка…</option></select>
       </label>
       <div class="topbar-right">
-        <span class="badge">Тестовый стенд</span>
         <span class="avatar" title="Пользователь">ФД</span>
       </div>
     </header>
@@ -93,18 +91,31 @@
             <button data-direction="risk">Риски</button>
             <button data-direction="opportunity">Возможности</button>
           </div>
-          <select id="importanceFilter" aria-label="Важность">
+          <select id="importanceFilter" aria-label="Важность" hidden>
             <option value="1">Важность от 1</option>
             <option value="2">Важность от 2</option>
             <option value="3" selected>Важность от 3</option>
             <option value="4">Важность от 4</option>
           </select>
+          <div class="importance-filter" id="importanceButtons" role="group" aria-label="Минимальная важность">
+            <button type="button" data-importance="1" aria-label="Важность от 1">1</button>
+            <button type="button" data-importance="2" aria-label="Важность от 2">2</button>
+            <button type="button" data-importance="3" aria-label="Важность от 3">3</button>
+            <button type="button" data-importance="4" aria-label="Важность от 4">4</button>
+          </div>
+          <button id="summarizeButton" class="button-violet">Суммаризировать с помощью ИИ</button>
+          <button id="chatHistoryButton" class="secondary">История чатов</button>
         </div>
       </div>
       <div class="legend"><span class="who who-ai">AI</span> интерпретация для вашей компании <span class="who who-bank">Альфа‑Банк</span> материалы аналитиков банка <span class="who who-src">Источник</span> первоисточник новости</div>
       <div class="insights">
-        <div class="feed" id="feed"></div>
-        <article class="detail" id="detail" aria-live="polite"></article>
+        <div class="feed" id="feed" aria-busy="true" aria-label="Загрузка новостей">
+          <div class="skeleton" aria-hidden="true"></div>
+          <div class="skeleton" aria-hidden="true"></div>
+        </div>
+        <article class="detail" id="detail" aria-live="polite">
+          <div class="panel empty" role="status">Загружаем новости для выбранной компании…</div>
+        </article>
       </div>
       </div>
       <div id="insightsSources" hidden>
@@ -147,6 +158,7 @@
           <input id="graphSearch" placeholder="Найти узел — имя или смысл (Enter)" autocomplete="off">
           <button id="graphLatest" class="secondary">Свежие события</button>
           <button id="graphAll" class="secondary">Весь граф</button>
+          <button id="graphChatOpen" class="button-violet">Обсудить граф с ИИ</button>
         </div>
       </div>
       <div class="graph-types" id="graphTypes"></div>
@@ -154,6 +166,23 @@
         <div class="graph-canvas-box"><canvas id="graphCanvas"></canvas><div class="graph-hint">Колесо — масштаб, перетаскивание — сдвиг, клик — подробности, двойной клик — раскрыть связи</div><div class="graph-results" id="graphResults"></div></div>
         <aside class="graph-side" id="graphSide"><p class="muted">Выберите узел, чтобы увидеть подробности и связи.</p></aside>
       </div>
+      <dialog class="dialog graph-chat-dialog" id="graphChatDialog" aria-labelledby="graphChatTitle">
+        <div class="dialog-head">
+          <h2 id="graphChatTitle">Обсуждение графа событий</h2>
+          <button type="button" class="icon-button" id="graphChatClose" aria-label="Закрыть">✕</button>
+        </div>
+        <p class="muted graph-chat-description">Спрашивайте о свежих событиях, противоречиях, связанных узлах и возможных причинах.</p>
+        <div class="graph-chat-prompts" aria-label="Примеры вопросов">
+          <button type="button" class="secondary" data-graph-question="Назови самые актуальные события графа. Для каждого укажи дату и доступные подтверждения.">Актуальные события</button>
+          <button type="button" class="secondary" data-graph-question="Найди противоречивые новости в графе. Сопоставь версии и объясни, какая лучше подтверждена, не опираясь только на число публикаций.">Противоречия</button>
+          <button type="button" class="secondary" data-graph-question="Какие узлы связаны с наибольшим числом событий? Укажи число и несколько примеров связанных событий.">Узлы с наибольшим числом событий</button>
+        </div>
+        <div class="news-chat-messages graph-chat-messages" id="graphChatMessages" role="log" aria-live="polite"></div>
+        <form class="news-chat-form" id="graphChatForm">
+          <textarea id="graphChatInput" rows="3" maxlength="4000" placeholder="Спросите о графе событий…" aria-label="Сообщение агенту графа" required></textarea>
+          <button type="submit" id="graphChatSend">Отправить</button>
+        </form>
+      </dialog>
     </section>
 
     <!-- Профиль выбранной компании -->
@@ -162,6 +191,7 @@
         <div><p class="eyebrow">Профиль компании</p><h1 id="profileTitle">Профиль</h1><p class="muted">Основную страницу аналитик видит всегда, остальные — по оглавлению и поиску.</p></div>
         <a class="button-link" href="#/onboarding">＋ Добавить компанию</a>
       </div>
+      <section class="panel profile-ai-editor" id="profileAIEditor"></section>
       <div id="profilePager"></div>
     </section>
 
@@ -176,5 +206,9 @@
     </section>
   </div>
 </div>
+<dialog class="dialog chat-history-dialog" id="chatHistoryDialog" aria-labelledby="chatHistoryTitle">
+  <div class="dialog-head"><h2 id="chatHistoryTitle">История обсуждений</h2><button type="button" class="icon-button" id="chatHistoryClose" aria-label="Закрыть">✕</button></div>
+  <div id="chatHistoryList"></div>
+</dialog>
 </body>
 </html>

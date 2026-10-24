@@ -28,28 +28,55 @@ function inline(parent, text) {
 }
 function markdown(text) {
   const root = el('div', '', 'md');
-  let list = null, table = null, para = [];
+  let list = null, tableRows = null, para = [];
+  const flushTable = () => {
+    if (!tableRows?.length) return;
+    const isDivider = row => row.length && row.every(cell => /^:?-{3,}:?$/.test(cell));
+    const hasHeader = tableRows.length > 1 && isDivider(tableRows[1]);
+    const table = el('table', '', 'md-table');
+    const bodyRows = hasHeader ? tableRows.slice(2) : tableRows;
+    if (hasHeader) {
+      const thead = el('thead'), tr = el('tr');
+      tableRows[0].forEach(cell => { const th = el('th'); inline(th, cell); tr.append(th); });
+      thead.append(tr); table.append(thead);
+    }
+    const tbody = el('tbody');
+    for (const row of bodyRows) {
+      const tr = el('tr');
+      row.forEach(cell => { const td = el('td'); inline(td, cell); tr.append(td); });
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    const wrap = el('div', '', 'md-table-wrap'); wrap.append(table); root.append(wrap);
+    tableRows = null;
+  };
   const flush = () => {
     if (para.length) { const p = el('p'); inline(p, para.join(' ')); root.append(p); para = []; }
-    list = null; table = null;
+    flushTable(); list = null;
+  };
+  const cells = line => {
+    const value = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return value.split('|').map(cell => cell.trim().replace(/\\\|/g, '|'));
   };
   for (const raw of String(text || '').split('\n')) {
     const line = raw.trimEnd();
     if (!line.trim()) { flush(); continue; }
+    if (line.trim().startsWith('|') && line.includes('|')) {
+      if (para.length || list) flush();
+      (tableRows ||= []).push(cells(line));
+      continue;
+    }
+    if (tableRows) flushTable();
     const heading = line.match(/^#{1,6}\s+(.*)/);
     const bullet = line.match(/^\s*[-*•]\s+(.*)/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)/);
     if (heading) { flush(); root.append(el('h4', heading[1])); }
-    else if (line.trim().startsWith('|')) {
-      if (para.length || list) flush();
-      if (!table) { table = el('pre', '', 'md-table'); root.append(table); }
-      table.textContent += (table.textContent ? '\n' : '') + line;
-    } else if (bullet || numbered) {
+    else if (bullet || numbered) {
       if (para.length) { const p = el('p'); inline(p, para.join(' ')); root.append(p); para = []; }
       const tag = bullet ? 'ul' : 'ol';
       if (!list || list.tagName.toLowerCase() !== tag) { list = el(tag); root.append(list); }
       const li = el('li'); inline(li, (bullet || numbered)[1]); list.append(li);
-    } else { list = null; table = null; para.push(line.trim()); }
+    } else { list = null; para.push(line.trim()); }
   }
   flush();
   return root;
@@ -249,8 +276,8 @@ async function submitForm(button) {
 function questionCard(q) {
   const card = el('div', '', 'question-card-chat');
   card.dataset.ref = q.ref || '';
-  let own = null, ownText = null;
-  if (q.kind === 'text') { const area = el('textarea'); area.rows = 3; area.id = 'qAnswer'; card.append(area); }
+  let own = null, ownText = null, answerArea = null;
+  if (q.kind === 'text') { answerArea = el('textarea'); answerArea.rows = 3; answerArea.id = 'qAnswer'; card.append(answerArea); }
   else {
     const name = 'q-' + (q.ref || session.messages.length), type = q.kind === 'multi' ? 'checkbox' : 'radio';
     for (const option of q.options.filter(o => o.trim())) {
@@ -278,6 +305,12 @@ function questionCard(q) {
     if (own.checked) chosen.push(text);
     submit(q.kind === 'multi' ? chosen : chosen[chosen.length - 1] || '');
   };
+  answerArea?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      send.click();
+    }
+  });
   dunno.onclick = () => submit(q.kind === 'multi' ? ['не знаю'] : 'не знаю');
   row.append(send, dunno); card.append(row);
   return card;

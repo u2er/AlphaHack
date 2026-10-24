@@ -113,6 +113,41 @@ class Insights:
     def profiles(self):
         return [p for p in self._get('/profiles') if p.get('active')]
 
+    def publish_profile(self, payload):
+        """Persist a confirmed onboarding profile immediately in EventGraph."""
+        return self._call('PUT', '/profiles', body=payload)
+
+    def profile_edit_proposal(self, profile_id, instruction):
+        return self._call('POST', f'/profiles/{profile_id}/edit-proposal',
+                          body={'instruction': instruction}, timeout=600)
+
+    def save_profile(self, profile_id, payload):
+        if payload.get('profile_id') != profile_id:
+            raise ValueError('Идентификатор профиля в черновике не совпадает')
+        return self.publish_profile(payload)
+
+    def summary(self, profile_id, min_importance, direction=''):
+        return self._call('GET', f'/ai/summaries/{profile_id}',
+                          params={'min_importance': min_importance, 'direction': direction})
+
+    def create_summary(self, profile_id, min_importance, direction=''):
+        return self._call('POST', f'/ai/summaries/{profile_id}',
+                          body={'min_importance': min_importance, 'direction': direction}, timeout=600)
+
+    def chats(self, profile_id):
+        return self._call('GET', f'/ai/chats/{profile_id}')
+
+    def chat(self, profile_id, item_uid):
+        return self._call('GET', f'/ai/chats/{profile_id}/{item_uid}')
+
+    def send_chat(self, profile_id, item_uid, message):
+        return self._call('POST', f'/ai/chats/{profile_id}/{item_uid}',
+                          body={'message': message}, timeout=1800)
+
+    def graph_chat(self, message, history):
+        return self._call('POST', '/ai/graph-chat',
+                          body={'message': message, 'history': history}, timeout=180)
+
     def profile(self, profile_id):
         """Name, role, the main page and the table of contents of a paged profile."""
         from profile.contract import load_profile, table_of_contents

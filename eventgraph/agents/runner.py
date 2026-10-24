@@ -230,9 +230,9 @@ async def create(agent: str, message: str, history: list[dict[str, Any]] | None 
 
 
 async def run(agent: str, message: str, history: list[dict[str, Any]] | None = None,
-              attachments: dict[str, str] | None = None) -> AgentRun:
+              attachments: dict[str, str] | None = None, variables: dict[str, str] | None = None) -> AgentRun:
     """Поставить ран и дождаться его. Возвращает строку рана с итогом."""
-    run_id = await create(agent, message, history, attachments)
+    run_id = await create(agent, message, history, attachments, variables)
     return await execute(run_id)
 
 

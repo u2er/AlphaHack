@@ -25,19 +25,23 @@ class AgentSpec:
     write: bool = False
     delete: bool = False
     maintenance: bool = False
+    graph_overview: bool = False
     # Интернет-поиск (eventgraph/agents/web.py), если задан SEARXNG_URL.
     web: bool = False
+    # Графовые инструменты доступны по умолчанию, кроме однократных сводок.
+    graph_read: bool = True
 
     @property
     def prompt(self) -> str:
         return self.prompt_for()
 
     def prompt_for(self, variables: dict[str, str] | None = None) -> str:
-        """Промпт с подстановками рана. Профиль компании — из рана (аналитик
-        оценивает запись для конкретного клиента), иначе из настроек: правка
-        профиля не трогает промпт."""
-        profile = (variables or {}).get("company_profile") or settings.company_profile
-        return load_prompt(self.prompt_file).replace("{{company_profile}}", profile.strip())
+        """Промпт с подстановками рана; профиль по умолчанию берётся из настроек."""
+        values = {"company_profile": settings.company_profile, **(variables or {})}
+        prompt = load_prompt(self.prompt_file)
+        for name, value in values.items():
+            prompt = prompt.replace("{{" + name + "}}", str(value).strip())
+        return prompt
 
 
 SPECS: dict[str, AgentSpec] = {
@@ -48,6 +52,11 @@ SPECS: dict[str, AgentSpec] = {
                           write=True, delete=True, maintenance=True),
     # Перед разбором оценивает запись для компании; граф только читает.
     "analyst": AgentSpec("analyst", "analyst.md", max_steps=30, temperature=0.2, web=True),
+    "summarizer": AgentSpec("summarizer", "news-summary.md", max_steps=1, temperature=0.1, graph_read=False),
+    "news_chat": AgentSpec("news_chat", "news-chat.md", max_steps=5, temperature=0.2,
+                           max_history=6, drop_tool_history=True),
+    "graph_chat": AgentSpec("graph_chat", "graph-chat.md", max_steps=8, temperature=0.2,
+                            max_history=8, drop_tool_history=True, graph_overview=True),
 }
 
 

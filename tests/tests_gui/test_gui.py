@@ -149,6 +149,25 @@ class GuiTests(unittest.TestCase):
             self.assertNotIn('secret', scripts)
         self.assertIn(('/profiles/p1/feed','secret'), seen)
 
+    def test_graph_chat_proxy_forwards_message_and_history(self):
+        import httpx
+        from gui.insights import Insights
+        seen = []
+
+        def handler(request):
+            seen.append((request.url.path, json.loads(request.content), request.headers.get('X-Api-Key')))
+            return httpx.Response(200, json={'reply': 'Связи в графе проверены'})
+
+        insights = Insights(base_url='http://eventgraph', api_key='secret', transport=httpx.MockTransport(handler))
+        history = [{'role': 'user', 'content': 'Расскажи о событиях'}]
+
+        self.assertEqual(insights.graph_chat('Какие причины?', history), {'reply': 'Связи в графе проверены'})
+        with tempfile.TemporaryDirectory() as tmp, Server(tmp, insights) as s:
+            result = s.post('/api/insights/graph-chat', {'message': 'Какие причины?', 'history': history})
+        self.assertEqual(result, {'reply': 'Связи в графе проверены'})
+        expected = ('/ai/graph-chat', {'message': 'Какие причины?', 'history': history}, 'secret')
+        self.assertEqual(seen, [expected, expected])
+
     def test_connectors_sources_and_graph_go_through_the_proxy(self):
         import httpx
         from gui.insights import Insights
@@ -164,6 +183,8 @@ class GuiTests(unittest.TestCase):
             if path == '/connectors/lenta_economics/state/reset': return httpx.Response(200, json=connectors[0])
             if path == '/profiles/p1/sources' and request.method == 'PUT':
                 return httpx.Response(200, json={'id':'p1','news_sources':json.loads(request.content)['sources']})
+            if path == '/profiles' and request.method == 'PUT':
+                return httpx.Response(201, json={'id':json.loads(request.content)['profile_id']})
             if path == '/health': return httpx.Response(200, json={'graph':'news'})
             if path == '/graphs/news':
                 return httpx.Response(200, json={'graph':'news','nodes':[{'id':'a','name':'ЦБ','meta':{'type':'org'},'item_count':0}],
@@ -196,6 +217,7 @@ class GuiTests(unittest.TestCase):
             self.assertEqual(view['profile']['news_sources'], ['lenta_economics'])
             self.assertEqual(s.published[-1]['news_sources'], ['lenta_economics'])
         self.assertIn(('POST', '/connectors/lenta_economics/state/reset', ''), calls)
+        self.assertTrue(any(method == 'PUT' and path == '/profiles' for method, path, _ in calls))
 
     def test_insights_without_eventgraph_report_a_readable_error(self):
         from gui.insights import Insights, InsightsError

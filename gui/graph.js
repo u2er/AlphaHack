@@ -19,6 +19,7 @@ let limit = MAX_VISIBLE;
 let data = null, loadedAt = 0, byId = new Map(), adjacency = new Map(), degree = new Map();
 let nodes = [], links = [], hidden = new Set(['outlet']), selected = null, hover = null;
 let view = { x: 0, y: 0, k: 1 }, raf = null, heat = 0, loading = null, fitPending = false, fitFocus = null;
+let graphConversation = [], graphChatSending = false, graphChatStatus = '', graphChatTimer = null, graphChatBound = false;
 const canvas = () => $('graphCanvas');
 
 const typeOf = n => TYPES[n.meta.type] ? n.meta.type : 'other';
@@ -93,6 +94,94 @@ function expand(id) {
   const ids = new Set(base);
   for (const { id: n } of (adjacency.get(id) || []).slice(0, 40)) ids.add(n);
   show(ids, id); renderSide();
+}
+
+function renderGraphChat() {
+  const box = $('graphChatMessages');
+  box.replaceChildren();
+  if (!graphConversation.length) {
+    const welcome = el('div', '', 'news-chat-message assistant');
+    welcome.append(el('b', 'ИИ'), el('p', 'Задайте вопрос о событиях, связях и противоречиях во всём графе.'));
+    box.append(welcome);
+  }
+  for (const message of graphConversation) {
+    const row = el('div', '', `news-chat-message ${message.role === 'user' ? 'user' : 'assistant'}${message.error ? ' error' : ''}`);
+    row.append(el('b', message.role === 'user' ? 'Вы' : 'ИИ'));
+    row.append(message.role === 'assistant' && !message.error
+      ? window.Alfa.markdown(message.content)
+      : el('p', message.content));
+    box.append(row);
+  }
+  if (graphChatSending) {
+    const status = el('div', '', 'agent-working');
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.append(el('span', '', 'spinner'), el('span', graphChatStatus, 'agent-status'));
+    box.append(status);
+  }
+  const scrollToLatest = () => {
+    if (box.isConnected) box.scrollTop = box.scrollHeight;
+  };
+  requestAnimationFrame(scrollToLatest);
+  setTimeout(scrollToLatest, 350);
+  $('graphChatSend').disabled = graphChatSending;
+  $('graphChatSend').textContent = graphChatSending ? 'Отвечаю…' : 'Отправить';
+}
+
+async function askGraph(question = null) {
+  const input = $('graphChatInput');
+  const message = String(question ?? input.value).trim();
+  if (!message || graphChatSending) return;
+  const history = graphConversation.slice(-8).map(({ role, content }) => ({ role, content }));
+  graphConversation.push({ role: 'user', content: message });
+  input.value = '';
+  graphChatSending = true;
+  const statuses = ['Изучаю граф событий…', 'Сверяю связи и источники…', 'Формулирую выводы…'];
+  let statusIndex = 0;
+  graphChatStatus = statuses[statusIndex];
+  renderGraphChat();
+  clearInterval(graphChatTimer);
+  graphChatTimer = setInterval(() => {
+    graphChatStatus = statuses[++statusIndex % statuses.length];
+    const status = $('graphChatMessages').querySelector('.agent-status');
+    if (status) status.textContent = graphChatStatus;
+  }, 3500);
+  try {
+    const response = await fetch('/api/insights/graph-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || `HTTP ${response.status}`);
+    if (!result.reply) throw Error('Агент не вернул ответ');
+    graphConversation.push({ role: 'assistant', content: result.reply });
+  } catch (error) {
+    graphConversation.push({ role: 'assistant', content: `Не удалось получить ответ: ${error.message}`, error: true });
+  } finally {
+    clearInterval(graphChatTimer);
+    graphChatTimer = null;
+    graphChatSending = false;
+    graphChatStatus = '';
+    renderGraphChat();
+  }
+}
+
+function bindGraphChat() {
+  if (graphChatBound) return;
+  graphChatBound = true;
+  const dialog = $('graphChatDialog');
+  $('graphChatOpen').onclick = () => { renderGraphChat(); dialog.showModal(); $('graphChatInput').focus(); };
+  $('graphChatClose').onclick = () => dialog.close();
+  $('graphChatForm').onsubmit = event => { event.preventDefault(); askGraph(); };
+  $('graphChatInput').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      $('graphChatForm').requestSubmit();
+    }
+  });
+  for (const button of dialog.querySelectorAll('[data-graph-question]'))
+    button.onclick = () => askGraph(button.dataset.graphQuestion);
 }
 
 // ── физика и отрисовка ──────────────────────────────────────────────────────
@@ -312,6 +401,7 @@ async function renderSide() {
 }
 
 async function open() {
+  bindGraphChat();
   const before = data;
   try { await load(); } catch (error) { $('graphStats').textContent = error.message; return; }
   if (!canvas().dataset.bound) { bind(); canvas().dataset.bound = '1'; }

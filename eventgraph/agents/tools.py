@@ -66,6 +66,69 @@ def _threshold(value: Any) -> float:
         return settings.graph_score_threshold
 
 
+def graph_overview_data(dump: dict[str, Any], latest_limit: int = 12, hub_limit: int = 12,
+                        relation_limit: int = 12) -> dict[str, Any]:
+    """Compact overview for graph-wide questions; count entities by distinct linked events."""
+    nodes = dump.get("nodes") or []
+    edges = dump.get("edges") or []
+    by_id = {node.get("id"): node for node in nodes if node.get("id")}
+    degree = upkeep.degrees(edges)
+    event_ids = {node["id"] for node in nodes
+                 if node.get("id") and upkeep.ntype(node) == "event"}
+    event_links: dict[str, set[str]] = {}
+    for edge in edges:
+        source, target = edge.get("source_id"), edge.get("target_id")
+        if source in event_ids and target in by_id and target not in event_ids:
+            event_links.setdefault(target, set()).add(source)
+        if target in event_ids and source in by_id and source not in event_ids:
+            event_links.setdefault(source, set()).add(target)
+
+    def importance(node: dict[str, Any]) -> int:
+        try:
+            return int((node.get("meta") or {}).get("importance") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    events = [node for node in nodes if upkeep.ntype(node) == "event"]
+    events.sort(key=lambda node: (
+        upkeep.event_day(node) or datetime.date.min,
+        importance(node),
+        str(node.get("updated_at") or ""),
+    ), reverse=True)
+    hubs = [node for node in nodes if upkeep.ntype(node) != "event"]
+    hubs.sort(key=lambda node: (len(event_links.get(node.get("id"), ())), degree.get(node.get("id"), 0)),
+              reverse=True)
+
+    relations = []
+    for edge in edges:
+        relation = str(edge.get("name") or "").casefold()
+        if relation not in ("contradicts", "develops"):
+            continue
+        source, target = by_id.get(edge.get("source_id")), by_id.get(edge.get("target_id"))
+        if not source or not target:
+            continue
+        latest = max(upkeep.event_day(source) or datetime.date.min,
+                     upkeep.event_day(target) or datetime.date.min)
+        relations.append((latest, relation == "contradicts", {
+            "relation": relation,
+            "source": upkeep.upkeep_side(source, degree),
+            "target": upkeep.upkeep_side(target, degree),
+        }))
+    relations.sort(key=lambda relation: (relation[0], relation[1]), reverse=True)
+
+    return {
+        "graph": dump.get("graph"),
+        "counts": {"nodes": len(nodes), "edges": len(edges), "events": len(events)},
+        "latest_events": [upkeep.upkeep_side(node, degree) for node in events[:latest_limit]],
+        "most_connected_nodes": [{
+            **upkeep.upkeep_side(node, degree),
+            "events_count": len(event_links.get(node.get("id"), ())),
+        } for node in hubs[:hub_limit]],
+        "story_relations": [relation[2] for relation in relations[:relation_limit]],
+        "truncated": bool(dump.get("truncated")),
+    }
+
+
 def as_list(value: Any) -> list[str]:
     """Список, строка через запятую или None."""
     if value is None:
@@ -232,7 +295,9 @@ def system_text(ctx: ToolContext) -> str:
 
 
 def build_tools(ctx: ToolContext) -> list[Tool]:
-    tools = _read_tools(ctx)
+    tools = _read_tools(ctx) if ctx.spec.graph_read else []
+    if not ctx.spec.graph_overview:
+        tools = [tool for tool in tools if tool.name != "graph_overview"]
     if ctx.spec.write:
         tools += _write_tools(ctx)
     if ctx.spec.write and ctx.spec.maintenance:
@@ -300,6 +365,18 @@ def _profile_tools(ctx: ToolContext) -> list[Tool]:
 
 def _read_tools(ctx: ToolContext) -> list[Tool]:
     graph = ctx.graph
+
+    async def graph_overview(latest_limit=12, hub_limit=12, relation_limit=12):
+        try:
+            dump = await graph_store.dump(graph)
+            return {"ok": True, **graph_overview_data(
+                dump,
+                _int(latest_limit, 12, high=30),
+                _int(hub_limit, 12, high=30),
+                _int(relation_limit, 12, high=30),
+            )}
+        except Exception as exc:  # noqa: BLE001
+            return _failed(exc)
 
     async def graph_search(query, kinds=None, meta=None, expand=0, limit=None, score_threshold=None):
         try:
@@ -372,6 +449,19 @@ def _read_tools(ctx: ToolContext) -> list[Tool]:
         return {"ok": True, "graph": graph, **out}
 
     return [
+        Tool("graph_overview", (
+            "Compact whole-graph overview: latest dated events, entities connected to the most distinct events, "
+            "and explicit develops/contradicts links. Use this for current-events and hub questions; use the "
+            "other graph tools to inspect evidence and relationships in detail. `events_count` counts distinct "
+            "directly linked event nodes, not all events in the graph."
+        ), {
+            "type": "object",
+            "properties": {
+                "latest_limit": {"type": "integer", "description": "Latest events to return, up to 30"},
+                "hub_limit": {"type": "integer", "description": "Most-connected entities to return, up to 30"},
+                "relation_limit": {"type": "integer", "description": "Story links to return, up to 30"},
+            },
+        }, graph_overview),
         Tool("graph_search", (
             "Search the graph by meaning — names, fields and attached texts. Use it to find whether an event "
             "or an entity is already there under other wording. `meta` filters exactly, e.g. {\"type\": \"event\"}."
