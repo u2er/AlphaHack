@@ -25,6 +25,8 @@ class AgentSpec:
     write: bool = False
     delete: bool = False
     maintenance: bool = False
+    # Интернет-поиск (eventgraph/agents/web.py), если задан SEARXNG_URL.
+    web: bool = False
 
     @property
     def prompt(self) -> str:
@@ -40,12 +42,12 @@ class AgentSpec:
 
 SPECS: dict[str, AgentSpec] = {
     # Разбирает каждую новую запись и пишет события в граф.
-    "news": AgentSpec("news", "news.md", max_steps=100, temperature=0.2, write=True),
+    "news": AgentSpec("news", "news.md", max_steps=100, temperature=0.2, write=True, web=True),
     # Обслуживает граф: дубли, островки, обрезка.
     "gardener": AgentSpec("gardener", "gardener.md", max_steps=60, temperature=0.2,
                           write=True, delete=True, maintenance=True),
     # Перед разбором оценивает запись для компании; граф только читает.
-    "analyst": AgentSpec("analyst", "analyst.md", max_steps=30, temperature=0.2),
+    "analyst": AgentSpec("analyst", "analyst.md", max_steps=30, temperature=0.2, web=True),
 }
 
 

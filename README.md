@@ -188,6 +188,21 @@ curl -s -H "$H" localhost:8000/graph/status | jq '{queue, working, paused_until}
 клиента — `POST /graph/requeue-below-threshold` вернёт такие записи в очередь:
 сделанные оценки не повторяются, новый клиент получает свою.
 
+### Интернет-поиск
+
+У `news` и `analyst` есть `web_search(query, category, time_range, domains)` и
+`web_page(source_id, offset)` — пакет `search_tool/` поверх SearXNG (сервис
+`searxng` в compose, `deploy/searxng/settings.yml`). Поиск берёт
+`WEB_SEARCH_RESULTS` (5) страниц, скачивает их (HTML, текст, PDF с текстовым
+слоем; запасной извлекатель — trafilatura) и с каждой отдаёт
+`WEB_SEARCH_FRAGMENTS` (2) фрагментов, ближайших к запросу по смыслу: их
+ранжирует тот же эмбеддер, что граф (`EmbedderRanker`), вторая модель в образ
+не нужна. `web_page` дочитывает найденную страницу кусками по 6000 символов;
+снимки страниц живут до конца рана. Запрос — около 15 секунд. Агенту
+поиск включается флагом `web` в `eventgraph/agents/specs.py`; `SEARXNG_URL=` в
+`.env` выключает его у всех. С хоста SearXNG доступен на
+`127.0.0.1:${SEARXNG_PORT:-8082}`: `python -m search_tool "запрос"`.
+
 ## Профили клиентов
 
 Профиль — страничный документ (`profile/contract.py`, `ProfileDocument`,

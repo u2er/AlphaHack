@@ -20,6 +20,8 @@ services:
       # Ключ LLM можно не держать в .env: `LLM_API_KEY=… docker compose up`.
       # Подстановка берёт его из окружения, иначе из .env.
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # Интернет-поиск агентов (web_search): SEARXNG_URL= в .env — выключить.
+      SEARXNG_URL: ${SEARXNG_URL-http://searxng:8080}
     ports:
       - "${PORT:-8000}:8000"
     volumes:
@@ -96,6 +98,21 @@ services:
       db:
         condition: service_healthy
 
+  searxng:
+    # Метапоисковик для web_search агентов (search_tool/): JSON-выдача, без
+    # лимитера. Наружу не открыт; с хоста — 127.0.0.1:8082 (python -m search_tool).
+    image: docker.io/searxng/searxng:2026.10.19-81371861f
+    container_name: eventgraph-searxng
+    restart: unless-stopped
+    environment:
+      # Ключ подписи куки и прокси картинок; задайте свой случайный в .env.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-eventgraph-searxng-change-me}
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8082}:8080"
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+
   db:
     # Postgres с pgvector: записи, раны агентов, граф с векторами и библиотека
     # профиля (схема profile_data) — в одной базе.
@@ -121,3 +138,4 @@ volumes:
   data:
   pg:
   profiles:
+  searxng-cache:

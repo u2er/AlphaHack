@@ -14,6 +14,12 @@ from eventgraph.graph import upkeep
 from eventgraph.models import GraphElement
 
 
+@pytest.fixture(autouse=True)
+def no_web(monkeypatch):
+    # В контейнере compose задаёт SEARXNG_URL; права в графе проверяются без поиска.
+    monkeypatch.setattr(agent_tools.settings, "searxng_url", "")
+
+
 # Агент без прав в графе: в проекте такого нет, но права проверяются и на нём.
 READER = AgentSpec("reader", "news.md", max_steps=5, temperature=0)
 

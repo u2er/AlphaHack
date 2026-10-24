@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     graph_search_limit: int = 8
     graph_score_threshold: float = 0.35
 
+    # ── Интернет-поиск агентов ───────────────────────────────────────────────
+    # SearXNG с JSON-выдачей (сервис searxng в docker-compose.yml); пусто —
+    # web_search у агентов выключен. Сколько страниц читать за поиск и сколько
+    # фрагментов с каждой отдавать агенту.
+    searxng_url: str = ""
+    web_search_results: int = 5
+    web_search_fragments: int = 2
+
     # ── Разбор новостей ──────────────────────────────────────────────────────
     news_item_chars: int = 4000
     news_item_images: int = 2
