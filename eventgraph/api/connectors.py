@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,9 +12,11 @@ from eventgraph.connectors import service
 from eventgraph.db import get_session
 from eventgraph.deps import require_auth
 from eventgraph.models import Connector, ConnectorRun, Item
-from eventgraph.sources import BY_NAME, SOURCES, Source
+from eventgraph.sources import BY_NAME, CUSTOM_KINDS, Source, custom_name, custom_spec, everything, target_of
 
-# Коннекторы заданы в sources.py: через API их запускают и смотрят, но не правят.
+# Коннекторы заданы в sources.py — через API их запускают и смотрят, но не
+# правят. Свои источники видов telegram_channel и website клиент заводит и
+# удаляет сам: они живут в connectors.spec.
 router = APIRouter(tags=["connectors"], dependencies=[Depends(require_auth)])
 
 
@@ -53,13 +55,14 @@ def _out(source: Source, connector: Connector | None, items: int) -> dict[str, A
         "last_status": connector.last_status if connector else "",
         "last_error": connector.last_error if connector else "",
         "items_count": items,
+        "custom": source.name not in BY_NAME,
     }
 
 
 async def _get(session: AsyncSession, name: str) -> tuple[Source, Connector]:
-    source = BY_NAME.get(name)
+    source = (await everything(session)).get(name)
     if source is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Такого источника нет в sources.py")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Такого источника нет")
     connector = await session.scalar(select(Connector).where(Connector.name == name))
     if connector is None:
         # Источник добавлен в код, а воркер с тех пор не стартовал.
@@ -72,7 +75,49 @@ async def _get(session: AsyncSession, name: str) -> tuple[Source, Connector]:
 async def list_connectors(session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
     rows = {c.name: c for c in (await session.execute(select(Connector))).scalars().all()}
     counts = dict((await session.execute(select(Item.connector_id, func.count()).group_by(Item.connector_id))).all())
-    return [_out(s, rows.get(s.name), counts.get(rows[s.name].id, 0) if s.name in rows else 0) for s in SOURCES]
+    return [_out(s, rows.get(s.name), counts.get(rows[s.name].id, 0) if s.name in rows else 0)
+            for s in (await everything(session)).values()]
+
+
+class ConnectorIn(BaseModel):
+    kind: str = Field(description="telegram_channel | website")
+    title: str = Field(default="", max_length=200, description="название для людей; пусто — по адресу")
+    target: str = Field(max_length=500, description="канал (@имя или ссылка t.me) или адрес раздела сайта")
+    interval_seconds: int = 3600
+
+
+@router.post("/connectors", status_code=201)
+async def create_connector(body: ConnectorIn, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Свой источник существующего вида. Первый запуск — на ближайшем тике воркера."""
+    try:
+        spec = custom_spec(body.kind, body.title, body.target, body.interval_seconds)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    known = await everything(session)
+    new = Source(name="_", collect=CUSTOM_KINDS[spec["kind"]], config=spec["config"])
+    twin = next((s for s in known.values() if target_of(s) == target_of(new)), None)
+    if twin is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"Такой источник уже есть: {twin.description.split(' — ')[0] or twin.name}")
+    # Имена удалённых источников заняты: их курсор и записи остаются в базе.
+    taken = set((await session.execute(select(Connector.name))).scalars().all()) | set(known)
+    connector = Connector(name=custom_name(spec, taken), state={}, spec=spec)
+    session.add(connector)
+    await session.commit()
+    source = (await everything(session))[connector.name]
+    return _out(source, connector, 0)
+
+
+@router.delete("/connectors/{name}")
+async def delete_connector(name: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Убрать добавленный источник: он больше не запускается и не виден, а
+    собранные записи и их разбор остаются. Источники из sources.py не удаляются."""
+    if name in BY_NAME:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Источник задан в sources.py — удалить его нельзя")
+    _, connector = await _get(session, name)
+    connector.spec = {**connector.spec, "removed": True}
+    await session.commit()
+    return {"name": name, "removed": True}
 
 
 @router.get("/connectors/{name}")

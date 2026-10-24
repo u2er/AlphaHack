@@ -34,8 +34,9 @@ def utcnow() -> datetime:
 
 class Connector(Base):
     """Состояние коннектора. Сам коннектор — код и настройки — задан в
-    `sources.py`; здесь — то, что меняется от запуска к запуску. Строка
-    заводится при старте по имени источника."""
+    `sources.py` или, для заведённых из интерфейса, в `spec`; здесь — то, что
+    меняется от запуска к запуску. Строка заводится при старте по имени
+    источника."""
 
     __tablename__ = "connectors"
 
@@ -50,6 +51,9 @@ class Connector(Base):
     last_error: Mapped[str] = mapped_column(Text, default="")
     # Пауза из интерфейса: по расписанию не запускается, вручную — можно.
     paused: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Источник, заведённый из интерфейса (sources.custom_spec): вид, настройки,
+    # период. У источников из sources.py — None.
+    spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

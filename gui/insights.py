@@ -55,10 +55,16 @@ class Insights:
     # ── коннекторы ──────────────────────────────────────────────────────────
     def connectors(self):
         return [{k: c.get(k) for k in ('name', 'kind', 'description', 'interval_seconds', 'enabled', 'paused',
-                                       'next_run_at', 'last_run_at', 'last_status', 'last_error', 'items_count')}
+                                       'next_run_at', 'last_run_at', 'last_status', 'last_error', 'items_count', 'custom')}
                 for c in self._get('/connectors')]
 
+    def create_connector(self, kind, title, target, interval_seconds):
+        return self._call('POST', '/connectors', body={'kind': kind, 'title': title, 'target': target,
+                                                      'interval_seconds': interval_seconds})
+
     def connector_action(self, name, action):
+        if action == 'delete':
+            return self._call('DELETE', f'/connectors/{name}')
         if action not in CONNECTOR_ACTIONS:
             raise KeyError('Нет такого действия')
         return self._call('POST', f'/connectors/{name}/{CONNECTOR_ACTIONS[action]}')

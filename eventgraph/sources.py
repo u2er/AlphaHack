@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
 from eventgraph.connectors.kinds import pdf, telegram_channel, website
 from eventgraph.connectors.runtime import Context, validate_name
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from eventgraph.models import Connector
 
 Collect = Callable[[Context], Awaitable[Any]]
 
@@ -103,3 +110,83 @@ def check(sources: tuple[Source, ...]) -> dict[str, Source]:
 
 
 BY_NAME: dict[str, Source] = check(SOURCES)
+
+
+# ── источники из интерфейса ──────────────────────────────────────────────────
+# Клиент заводит свои источники существующих видов; настройки — в
+# connectors.spec. PDF читает каталоги сервера — такие источники только в коде.
+CUSTOM_KINDS: dict[str, Collect] = {"telegram_channel": telegram_channel.collect, "website": website.collect}
+CUSTOM_INTERVALS = (1800, 3600, 3 * 3600, 6 * 3600, 24 * 3600)
+TME_RE = re.compile(r"^(?:https?://)?(?:www\.)?(?:t|telegram)\.me/(?:s/)?", re.I)
+
+
+def custom_spec(kind: str, title: str, target: str, interval_seconds: int) -> dict[str, Any]:
+    """Настройки источника из формы; ValueError — с понятной человеку причиной."""
+    title = " ".join(str(title or "").split())[:80]
+    target = str(target or "").strip()
+    if kind not in CUSTOM_KINDS:
+        raise ValueError("Вид источника — telegram_channel или website")
+    if interval_seconds not in CUSTOM_INTERVALS:
+        raise ValueError("Период опроса — 30 минут, 1, 3, 6 или 24 часа")
+    if kind == "telegram_channel":
+        channel = telegram_channel.channel_name(TME_RE.sub("", target).strip("/"))
+        config = {"channel": channel, "backfill": 10, "max_pages": 5}
+        where, short = f"Telegram-канал @{channel}", f"@{channel}"
+    else:
+        url = target if "://" in target else f"https://{target}"
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname or "." not in parts.hostname:
+            raise ValueError("Адрес сайта — ссылка на раздел новостей, например https://news.example.ru/news/")
+        config = {"url": url, "backfill": 10, "max_new_per_run": 15}
+        short = parts.hostname.removeprefix("www.")
+        where = f"сайт {short}"
+    return {"kind": kind, "config": config, "interval_seconds": interval_seconds,
+            "description": f"{title or short} — {where}"}
+
+
+def custom_name(spec: dict[str, Any], taken: set[str]) -> str:
+    """Имя коннектора из адреса: tg_<канал> или site_<хост>, свободное и допустимое."""
+    config = spec["config"]
+    if spec["kind"] == "telegram_channel":
+        base = "tg_" + config["channel"].lower()
+    else:
+        base = "site_" + re.sub(r"[^a-z0-9]+", "_", urlsplit(config["url"]).hostname.removeprefix("www.").lower())
+    base = re.sub(r"_+", "_", base).strip("_")[:58]
+    name, n = base, 1
+    while name in taken or validate_name(name):
+        n += 1
+        name = f"{base}_{n}"
+    return name
+
+
+def target_of(source: Source) -> str:
+    """Что источник читает — для поиска повторов: канал или адрес без схемы."""
+    if source.kind == "telegram_channel":
+        return "tg:" + str(source.config.get("channel", "")).lower()
+    url = str(source.config.get("url", ""))
+    return "url:" + url.split("://", 1)[-1].removeprefix("www.").rstrip("/").lower() if url else ""
+
+
+def from_row(connector: "Connector") -> Source | None:
+    """Источник по строке коннектора: из sources.py или из его spec."""
+    source = BY_NAME.get(connector.name)
+    spec = connector.spec
+    if source is not None or not spec or spec.get("removed"):
+        return source
+    collect = CUSTOM_KINDS.get(spec.get("kind"))
+    if collect is None:
+        return None
+    return Source(name=connector.name, collect=collect, config=dict(spec.get("config") or {}),
+                  description=spec.get("description", ""), interval_seconds=spec.get("interval_seconds"),
+                  enabled=bool(spec.get("enabled", True)))
+
+
+async def everything(session: "AsyncSession") -> dict[str, Source]:
+    """Все действующие источники: из sources.py и заведённые из интерфейса."""
+    from sqlalchemy import select
+
+    from eventgraph.models import Connector
+
+    rows = (await session.execute(select(Connector).where(Connector.spec.is_not(None)))).scalars().all()
+    custom = {row.name: source for row in rows if row.name not in BY_NAME and (source := from_row(row))}
+    return {**BY_NAME, **custom}

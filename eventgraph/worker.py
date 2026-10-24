@@ -14,7 +14,7 @@ from eventgraph.connectors import service
 from eventgraph.db import SessionLocal, create_schema
 from eventgraph.logging_config import setup_logging
 from eventgraph.models import Connector, ConnectorRun
-from eventgraph.sources import SOURCES
+from eventgraph.sources import SOURCES, everything
 
 logger = logging.getLogger("eventgraph.worker")
 
@@ -101,12 +101,12 @@ class Worker:
     # ── расписание ───────────────────────────────────────────────────────────
 
     async def _schedule_due(self) -> None:
-        """Запуски по расписанию источников из sources.py."""
-        scheduled = {s.name: s for s in SOURCES if s.enabled and s.interval_seconds}
-        if not scheduled:
-            return
+        """Запуски по расписанию: источники из sources.py и добавленные из интерфейса."""
         now = _now()
         async with SessionLocal() as session:
+            scheduled = {s.name: s for s in (await everything(session)).values() if s.enabled and s.interval_seconds}
+            if not scheduled:
+                return
             due = (
                 await session.execute(
                     select(Connector).where(

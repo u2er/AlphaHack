@@ -18,7 +18,7 @@ from eventgraph.connectors.normalize import Draft, ResultError, finalize_ids, js
 from eventgraph.connectors.runtime import Context
 from eventgraph.db import SessionLocal
 from eventgraph.models import Connector, ConnectorRun, Item
-from eventgraph.sources import BY_NAME, Source
+from eventgraph.sources import BY_NAME, Source, from_row
 from eventgraph.uid import new_uid
 
 logger = logging.getLogger(__name__)
@@ -125,9 +125,9 @@ async def execute(run_id: int) -> None:
         if run is None:
             return
         connector = await session.get(Connector, run.connector_id)
-        source = BY_NAME.get(connector.name) if connector is not None else None
+        source = from_row(connector) if connector is not None else None
         if source is None:
-            run.status, run.error, run.finished_at = "error", "Источника нет в sources.py", _now()
+            run.status, run.error, run.finished_at = "error", "Источника нет ни в sources.py, ни среди добавленных", _now()
             await session.commit()
             return
         state, last_run_at = connector.state or {}, connector.last_run_at

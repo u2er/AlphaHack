@@ -117,6 +117,10 @@ class Handler(BaseHTTPRequestHandler):
     def _insights_post(self, parts, body):
         insights = self.server.insights
         try:
+            if parts == ['connectors']:
+                interval = int(body.get('interval_seconds') or 3600)
+                return self.json(201,insights.create_connector(str(body.get('kind') or ''),str(body.get('title') or '')[:200],
+                                                               str(body.get('target') or '')[:500],interval))
             if len(parts) == 3 and parts[0] == 'connectors':
                 return self.json(200,insights.connector_action(parts[1],parts[2]))
             if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'sources':

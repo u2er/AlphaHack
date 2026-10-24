@@ -14,11 +14,11 @@
   <aside class="sidebar" id="sidebar">
     <a class="logo" href="#/home"><span class="mark">А</span><span>Альфа‑Бизнес</span></a>
     <nav class="menu" aria-label="Разделы">
-      <a href="#/home"><span class="ico">⌂</span>Главная</a>
-      <a href="#/insights" class="menu-accent"><span class="ico">✦</span>Бизнес‑аналитика<span class="new">Новое</span></a>
-      <a href="#/graph"><span class="ico">⋈</span>Граф событий</a>
-      <a href="#/profile"><span class="ico">◎</span>Профиль компании</a>
-      <a href="#/onboarding"><span class="ico">＋</span>Добавить компанию</a>
+      <a href="#/home"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/><path d="M10 20v-6h4v6"/></svg><span>Главная</span></a>
+      <a href="#/insights"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/><path d="M18.5 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></svg><span>Бизнес‑аналитика</span></a>
+      <a href="#/graph"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="7" r="2.3"/><circle cx="12" cy="18" r="2.3"/><path d="M8.2 6.4l7.5.4M7.2 8l3.7 7.9M16.9 9.1l-3.7 6.9"/></svg><span>Граф событий</span></a>
+      <a href="#/profile"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Профиль компании</span></a>
+      <a href="#/onboarding"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></svg><span>Добавить компанию</span></a>
     </nav>
     <p class="sidebar-note">Прототип для хакатона: бизнес‑аналитика и профиль компании работают на реальных данных стенда.</p>
   </aside>
@@ -41,19 +41,34 @@
     <!-- Главная -->
     <section class="view" id="view-home" hidden>
       <div class="page-head">
-        <div><p class="eyebrow" id="homeGreeting">Добрый день</p><h1 id="homeTitle">Главная</h1></div>
+        <div><p class="eyebrow" id="homeGreeting">Добрый день</p><h1 id="homeTitle">Главная</h1><p class="muted" id="homeRole"></p></div>
       </div>
+      <div class="kpis" id="homeKpis"></div>
       <a class="entry" href="#/insights" id="entryBanner">
         <div class="entry-text">
-          <span class="entry-kicker">✦ Бизнес‑аналитика</span>
+          <span class="entry-kicker">Бизнес‑аналитика</span>
           <h2 id="entryTitle">Что важно для вашего бизнеса сегодня</h2>
           <p id="entrySub">Новости рынка, отобранные под вашу компанию, с интерпретацией и аналитикой Альфа‑Банка.</p>
           <span class="entry-btn">Открыть ленту →</span>
         </div>
         <div class="entry-list" id="entryList"></div>
       </a>
+      <div class="home-grid">
+        <section class="panel home-panel">
+          <div class="home-panel-head"><h3>Что сделать в первую очередь</h3><span class="who who-ai">AI</span></div>
+          <p class="muted">Шаги из самых важных событий для вашей компании.</p>
+          <ol class="home-actions" id="homeActions"></ol>
+        </section>
+        <section class="panel home-panel">
+          <div class="home-panel-head"><h3>Что затрагивают события</h3></div>
+          <p class="muted">Направления бизнеса в отобранных событиях и доля рисков в них.</p>
+          <div class="home-areas" id="homeAreas"></div>
+        </section>
+      </div>
       <div class="home-cards">
-        <a class="home-card" href="#/profile"><b>Профиль компании</b><span id="homeProfile">Что аналитика знает о вашем бизнесе</span></a>
+        <a class="home-card" href="#/profile"><b>Профиль компании</b><span id="homeProfile">Что аналитика знает о вашем бизнесе</span><small id="homeProfileText"></small></a>
+        <a class="home-card" href="#/insights" id="homeSourcesCard"><b>Источники новостей</b><span id="homeSources">Откуда подбирается лента</span><div class="home-sources" id="homeSourceList"></div></a>
+        <a class="home-card" href="#/graph"><b>Граф событий</b><span>События, компании, люди и места — и как они связаны</span></a>
         <a class="home-card" href="#/onboarding"><b>Добавить компанию</b><span>Анкета, документы и пара вопросов — лента подстроится</span></a>
       </div>
     </section>
@@ -93,9 +108,35 @@
       </div>
       </div>
       <div id="insightsSources" hidden>
-        <section class="panel" id="clientSources"></section>
-        <section id="connectors"></section>
+        <div class="sources-head">
+          <div><h2 id="sourcesTitle">Источники</h2><p class="muted">Включённые источники попадают в ленту компании; новости из выключенных для неё не оцениваются.</p></div>
+          <button id="sourceAdd">＋ Добавить источник</button>
+        </div>
+        <div class="source-grid" id="connectors"></div>
       </div>
+      <dialog class="dialog" id="sourceDialog" aria-labelledby="sourceDialogTitle">
+        <form id="sourceForm" novalidate>
+          <div class="dialog-head"><h2 id="sourceDialogTitle">Новый источник</h2><button type="button" class="icon-button" id="sourceClose" aria-label="Закрыть">✕</button></div>
+          <fieldset class="kind-pick">
+            <legend>Тип</legend>
+            <label class="kind-option"><input type="radio" name="kind" value="telegram_channel" checked><span><b>Telegram‑канал</b><small>Публичный канал с веб‑превью t.me/s/…</small></span></label>
+            <label class="kind-option"><input type="radio" name="kind" value="website"><span><b>Сайт</b><small>Раздел новостей: RSS, sitemap или список статей</small></span></label>
+          </fieldset>
+          <label class="field"><span id="sourceTargetLabel">Канал</span><input name="target" id="sourceTarget" required autocomplete="off" placeholder="@channel или https://t.me/channel"><small id="sourceTargetHint">Закрытые каналы, группы и ссылки‑приглашения не читаются.</small></label>
+          <label class="field"><span>Название <i>необязательно</i></span><input name="title" maxlength="80" autocomplete="off" placeholder="Как источник будет подписан в ленте"></label>
+          <label class="field"><span>Как часто проверять</span>
+            <select name="interval_seconds">
+              <option value="1800">Каждые 30 минут</option>
+              <option value="3600" selected>Каждый час</option>
+              <option value="10800">Каждые 3 часа</option>
+              <option value="21600">Каждые 6 часов</option>
+              <option value="86400">Раз в сутки</option>
+            </select>
+          </label>
+          <p class="form-error" id="sourceError" hidden></p>
+          <div class="dialog-actions"><button type="button" class="secondary" id="sourceCancel">Отмена</button><button type="submit" id="sourceSubmit">Добавить</button></div>
+        </form>
+      </dialog>
     </section>
 
     <!-- Граф событий -->

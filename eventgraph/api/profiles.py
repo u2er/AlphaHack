@@ -12,7 +12,7 @@ from eventgraph import analyst, profiles
 from eventgraph.db import get_session
 from eventgraph.deps import require_auth
 from eventgraph.models import CompanyProfile, Connector, Item
-from eventgraph.sources import BY_NAME
+from eventgraph.sources import everything
 from profile.contract import load_profile, table_of_contents
 
 router = APIRouter(prefix="/profiles", tags=["profiles"], dependencies=[Depends(require_auth)])
@@ -83,9 +83,10 @@ class SourcesIn(BaseModel):
 
 
 @router.put("/{profile_id}/sources")
-async def put_sources(profile_id: str, body: SourcesIn) -> dict[str, Any]:
+async def put_sources(profile_id: str, body: SourcesIn, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     """Какие источники смотрит клиент: записи других он не получает. Пусто — все."""
-    unknown = [name for name in body.sources if name not in BY_NAME]
+    known = await everything(session)
+    unknown = [name for name in body.sources if name not in known]
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Нет таких источников: {', '.join(unknown)}")
     row = await profiles.set_sources(profile_id, body.sources)
