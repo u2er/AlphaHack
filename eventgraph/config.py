@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     emb_model: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
     # Сколько текстов уходит в эмбеддер за раз.
     emb_batch: int = 32
+    # Готовые векторы базового графа и профилей-примеров (eventgraph/embed_cache.py):
+    # builtin — eventgraph/seed/embeddings.npz, путь — свой файл, off — считать всё.
+    emb_cache: str = "builtin"
 
     # ── Граф ─────────────────────────────────────────────────────────────────
     graph_name: str = "news"

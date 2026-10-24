@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from eventgraph import embed_cache
 from eventgraph.config import settings
 
 logger = logging.getLogger(__name__)
@@ -130,20 +131,38 @@ def _clean(texts: list[str]) -> list[str]:
     return [(t or "").strip()[:8000] or " " for t in texts]
 
 
+def _cached(texts: list[str], prefix: str) -> tuple[list[np.ndarray | None], list[int]]:
+    """Готовые векторы (eventgraph/embed_cache.py) и номера текстов, которые надо считать."""
+    found = embed_cache.lookup([prefix + t for t in texts])
+    return found, [i for i, vector in enumerate(found) if vector is None]
+
+
+def _fill(found: list[np.ndarray | None], missing: list[int], texts: list[str], prefix: str,
+          vectors: np.ndarray) -> np.ndarray:
+    embed_cache.remember([prefix + t for t in texts], vectors)
+    for i, vector in zip(missing, vectors):
+        found[i] = vector
+    return np.vstack(found).astype(np.float32)
+
+
 async def embed(texts: list[str], urgent: bool = False) -> np.ndarray:
     """Нормированные векторы текстов, float32, по строке на текст."""
     texts = _clean(texts)
     if not texts:
         return np.zeros((0, 0), dtype=np.float32)
+    found, missing = _cached(texts, _prefix())
+    if not missing:
+        return np.vstack(found)
+    texts = [texts[i] for i in missing]
     gate = _get_gate()
     if urgent:
         async with gate.urgent():
-            return await _create(texts)
+            return _fill(found, missing, texts, _prefix(), await _create(texts))
     parts = []
     for start in range(0, len(texts), max(1, settings.emb_batch)):
         async with gate.background():
             parts.append(await _create(texts[start:start + settings.emb_batch]))
-    return np.vstack(parts)
+    return _fill(found, missing, texts, _prefix(), np.vstack(parts))
 
 
 async def embed_one(text: str, urgent: bool = True) -> np.ndarray:
@@ -157,9 +176,14 @@ def embed_sync(texts: list[str], passage: bool = False) -> np.ndarray:
     texts = _clean(texts)
     if not texts:
         return np.zeros((0, 0), dtype=np.float32)
+    found, missing = _cached(texts, _prefix(passage))
+    if not missing:
+        return np.vstack(found)
+    texts = [texts[i] for i in missing]
     create = _remote_sync if remote() else _local_sync
     step = max(1, settings.emb_batch)
-    return np.vstack([create(texts[start:start + step], passage) for start in range(0, len(texts), step)])
+    vectors = np.vstack([create(texts[start:start + step], passage) for start in range(0, len(texts), step)])
+    return _fill(found, missing, texts, _prefix(passage), vectors)
 
 
 def model_name() -> str:
