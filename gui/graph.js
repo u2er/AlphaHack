@@ -96,9 +96,10 @@ function expand(id) {
   show(ids, id); renderSide();
 }
 
-function renderGraphChat() {
+function renderGraphChat(follow = false) {
   const box = $('graphChatMessages');
   if (!box) return;
+  const scroll = window.Alfa.scrollMemo(box, follow);
   box.replaceChildren();
   if (!graphConversation.length) {
     const welcome = el('div', '', 'news-chat-message assistant');
@@ -120,11 +121,7 @@ function renderGraphChat() {
     status.append(el('span', '', 'spinner'), el('span', graphChatStatus, 'agent-status'));
     box.append(status);
   }
-  const scrollToLatest = () => {
-    if (box.isConnected) box.scrollTop = box.scrollHeight;
-  };
-  requestAnimationFrame(scrollToLatest);
-  setTimeout(scrollToLatest, 350);
+  window.Alfa.restoreScroll(box, scroll);
   const send = $('graphChatSend');
   if (send) {
     send.disabled = graphChatSending;
@@ -143,7 +140,7 @@ async function askGraph(question = null) {
   const statuses = ['Изучаю граф событий…', 'Сверяю связи и источники…', 'Формулирую выводы…'];
   let statusIndex = 0;
   graphChatStatus = statuses[statusIndex];
-  renderGraphChat();
+  renderGraphChat(true);
   clearInterval(graphChatTimer);
   graphChatTimer = setInterval(() => {
     graphChatStatus = statuses[++statusIndex % statuses.length];

@@ -92,7 +92,7 @@ services:
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:-eventgraph-searxng-change-me}
     ports:
-      - "$127.0.0.1:${SEARXNG_PORT:-8082}:8080"
+      - "127.0.0.1:${SEARXNG_PORT:-8082}:8080"
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
       - searxng-cache:/var/cache/searxng

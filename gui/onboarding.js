@@ -97,6 +97,25 @@ function markdown(text) {
   return root;
 }
 
+// ── прокрутка чатов ─────────────────────────────────────────────────────────
+// Чаты перерисовываются целиком (ответ агента, смена статуса). Вниз прокручиваем,
+// только если читатель и так был внизу или сам отправил сообщение; иначе
+// возвращаем его на прежнее место — иначе листать историю во время работы агента нельзя.
+const atBottom = n => n.scrollHeight - n.scrollTop - n.clientHeight < 48;
+function scrollMemo(node, follow = false) {
+  return node ? { top: node.scrollTop, follow: follow || atBottom(node) } : { top: 0, follow: true };
+}
+function restoreScroll(node, memo) {
+  const apply = () => { if (node.isConnected) node.scrollTop = memo.follow ? node.scrollHeight : memo.top; };
+  apply();
+  if (!memo.follow) return;
+  // Разметка дорастает после первого кадра — догоняем низ, пока читатель не начал листать сам.
+  const watch = new AbortController();
+  for (const type of ['wheel', 'touchstart', 'pointerdown']) node.addEventListener(type, () => watch.abort(), { passive: true, signal: watch.signal });
+  requestAnimationFrame(() => { if (!watch.signal.aborted) apply(); });
+  setTimeout(() => { if (!watch.signal.aborted) apply(); watch.abort(); }, 350);
+}
+
 // ── страницы профиля: оглавление слева, страница справа ─────────────────────
 const ORIGIN = { agent: 'агент', user: 'исправлено вами', file: 'документ', dataset: 'набор банка', dialog: 'ваши ответы', v1: 'мастер' };
 function pager(box, { pages, load, editable = false, mainLimit = 4000, onSave }) {
@@ -344,6 +363,9 @@ function questionCard(q) {
 function renderAll() {
   if (!session) return;
   const chat = $('chat');
+  // Чат онбординга листается вместе со страницей: «внизу» — конец чата на экране.
+  const nearEnd = chat.getBoundingClientRect().bottom <= window.innerHeight + 160;
+  const before = renderAll.tail;
   // Открытая анкета после отправки сменяется строкой «Анкета отправлена» — один раз.
   // Эта строка тоже .form-card, поэтому проверяем только редактируемую анкету: иначе
   // каждый опрос стирал бы чат вместе с отмеченными вариантами вопроса.
@@ -361,7 +383,11 @@ function renderAll() {
   else if (session.status === 'working') { const typing = el('div', '', 'msg msg-activity typing'); typing.append(el('span', '', 'dot-pulse'), el('span', 'Агент работает…')); chat.append(typing); }
   renderFiles();
   renderReview();
-  if (rendered && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') chat.lastElementChild?.scrollIntoView({ block: 'nearest' });
+  // Опрос идёт раз в 1,5 с: прокручиваем только к новому содержимому и только если
+  // читатель уже был у конца чата, а не листал историю выше.
+  renderAll.tail = `${session.id}|${rendered}|${session.question?.ref ?? ''}|${session.status}`;
+  const grew = renderAll.tail !== before;
+  if (rendered && grew && nearEnd && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') chat.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }
 
 let reviewFor = null;
@@ -432,5 +458,5 @@ function sourcesCard(doc) {
 }
 
 $('chatRestart').onclick = () => { if (confirm('Начать добавление компании заново? Текущий диалог будет закрыт.')) restart().catch(e => notice(e.message, true)); };
-window.Alfa = { markdown, pager, onboarding: { open: () => open().catch(e => notice(e.message, true)) } };
+window.Alfa = { markdown, pager, scrollMemo, restoreScroll, onboarding: { open: () => open().catch(e => notice(e.message, true)) } };
 })();

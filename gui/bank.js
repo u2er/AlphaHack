@@ -18,6 +18,7 @@ let activeChatUid = '', chatArticle = null, chatMessages = [], chatSending = fal
 let chatPendingMessage = '', chatStatus = '', chatStatusTimer = null;
 let chatGeneration = 0;
 let profileEditProposal = null, profileEditBusy = false;
+let detailUid = null;  // какая новость сейчас открыта в правой колонке
 function resetChatView() {
   chatGeneration++;
   clearInterval(chatStatusTimer); chatStatusTimer = null;
@@ -218,7 +219,9 @@ function block(title, who, ...children) {
 function renderDetail(item) {
   if (!item) return;
   if (activeChatUid === item.uid && chatArticle) return renderChat(item);
-  const a = item.analysis, d = $('detail'); d.replaceChildren(); d.scrollTop = 0;
+  // Та же новость после обновления ленты остаётся на прочитанном месте; другая — сверху.
+  const a = item.analysis, d = $('detail'), top = detailUid === item.uid ? d.scrollTop : 0;
+  detailUid = item.uid; d.replaceChildren();
   const meta = el('div', '', 'card-top');
   if (a.direction) meta.append(el('span', DIRECTION[a.direction] || a.direction, `chip ${a.direction}`));
   for (const [map, key] of [[RELEVANCE, 'relevance'], [HORIZON, 'horizon'], [TREND, 'trend']])
@@ -264,6 +267,7 @@ function renderDetail(item) {
   const discuss = el('button', 'Обсудить с ИИ', 'button-red');
   discuss.onclick = () => openChat(item);
   actions.append(discuss); d.append(actions);
+  d.scrollTop = top;
 }
 
 function summaryFilters() {
@@ -271,7 +275,7 @@ function summaryFilters() {
 }
 
 function renderOverview() {
-  const detail = $('detail');
+  const detail = $('detail'); detailUid = null;
   detail.replaceChildren();
   if (currentSummary) {
     const section = el('section', '', 'summary-section');
@@ -321,8 +325,12 @@ async function createSummary() {
   finally { summaryLoading = false; button.disabled = false; button.textContent = 'Суммаризировать с помощью ИИ'; }
 }
 
-function renderChat(item) {
-  const detail = $('detail'); detail.replaceChildren();
+function renderChat(item, follow = false) {
+  const detail = $('detail'); detailUid = null;
+  // Чат уже был на экране — сохраняем, где читатель; открыли только что — сразу к последним сообщениям.
+  const before = detail.querySelector('.news-chat-messages');
+  const messagesScroll = window.Alfa.scrollMemo(before, follow), detailScroll = window.Alfa.scrollMemo(before && detail, follow);
+  detail.replaceChildren();
   const header = el('div', '', 'chat-news-header');
   header.append(el('h2', titleOf(item)));
   const restore = el('button', 'Вернуться к новости', 'secondary');
@@ -349,13 +357,6 @@ function renderChat(item) {
   }
   if (!chatMessages.length && !chatPendingMessage) messages.append(el('p', 'Задайте вопрос об этой новости. Агент учитывает её текст, профиль компании и связанные публикации.', 'muted'));
   detail.append(messages);
-  const scrollToLatest = () => {
-    if (!messages.isConnected) return;
-    messages.scrollTop = messages.scrollHeight;
-    detail.scrollTop = detail.scrollHeight;
-  };
-  requestAnimationFrame(scrollToLatest);
-  setTimeout(scrollToLatest, 350);
   const form = el('form', '', 'news-chat-form'), input = el('textarea');
   input.rows = 3; input.maxLength = 4000; input.placeholder = 'Напишите сообщение…'; input.required = true;
   input.addEventListener('keydown', event => {
@@ -381,7 +382,7 @@ function renderChat(item) {
     ];
     let statusIndex = 0;
     chatStatus = statuses[statusIndex];
-    renderChat(item);
+    renderChat(item, true);
     clearInterval(chatStatusTimer);
     chatStatusTimer = setInterval(() => {
       if (generation !== chatGeneration) return;
@@ -401,6 +402,8 @@ function renderChat(item) {
     }
   };
   detail.append(form);
+  window.Alfa.restoreScroll(messages, messagesScroll);
+  window.Alfa.restoreScroll(detail, detailScroll);
 }
 
 async function openChat(item) {
