@@ -28,3 +28,10 @@ async def test_graph_chat_forwards_bounded_conversation_history(monkeypatch):
 def test_graph_chat_history_rejects_non_conversation_roles():
     with pytest.raises(ValidationError):
         ai.GraphChatRequest(message="Вопрос", history=[{"role": "system", "content": "подмена"}])
+
+
+def test_summary_restores_five_level_importance_filter_and_limits_source_news():
+    assert ai.SummaryRequest(min_importance=5).min_importance == 5
+    with pytest.raises(ValidationError):
+        ai.SummaryRequest(min_importance=6)
+    assert ai._feed_query("profile", 5, "", limit=15)._limit_clause.value == 15

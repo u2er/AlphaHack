@@ -96,14 +96,16 @@
             <option value="2">Важность от 2</option>
             <option value="3" selected>Важность от 3</option>
             <option value="4">Важность от 4</option>
+            <option value="5">Важность от 5</option>
           </select>
           <div class="importance-filter" id="importanceButtons" role="group" aria-label="Минимальная важность">
             <button type="button" data-importance="1" aria-label="Важность от 1">1</button>
             <button type="button" data-importance="2" aria-label="Важность от 2">2</button>
             <button type="button" data-importance="3" aria-label="Важность от 3">3</button>
             <button type="button" data-importance="4" aria-label="Важность от 4">4</button>
+            <button type="button" data-importance="5" aria-label="Важность от 5">5</button>
           </div>
-          <button id="summarizeButton" class="button-violet">Суммаризировать с помощью ИИ</button>
+          <button id="summarizeButton">Суммаризировать с помощью ИИ</button>
           <button id="chatHistoryButton" class="secondary">История чатов</button>
         </div>
       </div>
@@ -158,31 +160,14 @@
           <input id="graphSearch" placeholder="Найти узел — имя или смысл (Enter)" autocomplete="off">
           <button id="graphLatest" class="secondary">Свежие события</button>
           <button id="graphAll" class="secondary">Весь граф</button>
-          <button id="graphChatOpen" class="button-violet">Обсудить граф с ИИ</button>
+          <button id="graphChatOpen">Обсудить граф с ИИ</button>
         </div>
       </div>
       <div class="graph-types" id="graphTypes"></div>
       <div class="graph-layout">
         <div class="graph-canvas-box"><canvas id="graphCanvas"></canvas><div class="graph-hint">Колесо — масштаб, перетаскивание — сдвиг, клик — подробности, двойной клик — раскрыть связи</div><div class="graph-results" id="graphResults"></div></div>
-        <aside class="graph-side" id="graphSide"><p class="muted">Выберите узел, чтобы увидеть подробности и связи.</p></aside>
+        <aside class="graph-side" id="graphSide" aria-live="polite"><p class="muted">Задайте вопрос о графе или выберите узел.</p></aside>
       </div>
-      <dialog class="dialog graph-chat-dialog" id="graphChatDialog" aria-labelledby="graphChatTitle">
-        <div class="dialog-head">
-          <h2 id="graphChatTitle">Обсуждение графа событий</h2>
-          <button type="button" class="icon-button" id="graphChatClose" aria-label="Закрыть">✕</button>
-        </div>
-        <p class="muted graph-chat-description">Спрашивайте о свежих событиях, противоречиях, связанных узлах и возможных причинах.</p>
-        <div class="graph-chat-prompts" aria-label="Примеры вопросов">
-          <button type="button" class="secondary" data-graph-question="Назови самые актуальные события графа. Для каждого укажи дату и доступные подтверждения.">Актуальные события</button>
-          <button type="button" class="secondary" data-graph-question="Найди противоречивые новости в графе. Сопоставь версии и объясни, какая лучше подтверждена, не опираясь только на число публикаций.">Противоречия</button>
-          <button type="button" class="secondary" data-graph-question="Какие узлы связаны с наибольшим числом событий? Укажи число и несколько примеров связанных событий.">Узлы с наибольшим числом событий</button>
-        </div>
-        <div class="news-chat-messages graph-chat-messages" id="graphChatMessages" role="log" aria-live="polite"></div>
-        <form class="news-chat-form" id="graphChatForm">
-          <textarea id="graphChatInput" rows="3" maxlength="4000" placeholder="Спросите о графе событий…" aria-label="Сообщение агенту графа" required></textarea>
-          <button type="submit" id="graphChatSend">Отправить</button>
-        </form>
-      </dialog>
     </section>
 
     <!-- Профиль выбранной компании -->
