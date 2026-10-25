@@ -34,6 +34,8 @@ dependencies = [
     "tesserocr>=2.8",
     "transformers>=4.46,<5",
     "pypdfium2==4.30.0",
+    # Трассировка LLM в Langfuse (utils/tracing.py); без ключей LANGFUSE_* не включается.
+    "langfuse==4.17.0",
     # CPU-сборки, как в Dockerfile; источник — pytorch-cpu ниже.
     "torch",
     "torchvision",

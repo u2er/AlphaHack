@@ -24,6 +24,7 @@ from eventgraph.agents import runner
 from eventgraph.config import settings
 from eventgraph.models import Item
 from eventgraph.profiles import DEFAULT_ID, Active
+from utils import tracing
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,9 @@ async def assess(message: str, uid: str, attachments: dict[str, str],
         if profile.paged:
             variables["profile_id"] = profile.id  # страницы профиля — инструментами profile_*
     run_id = await runner.create("analyst", message, attachments=attachments, variables=variables)
-    row = await runner.execute(run_id)
+    # Клиент — «пользователь» Langfuse: расход и ошибки видны по каждой компании.
+    with tracing.attributes(user_id=profile.id if profile else DEFAULT_ID):
+        row = await runner.execute(run_id)
     output = (row.output or "") if row.status == "done" else ""
     found = parse_analysis(output, uid) if output else None
     if found is not None:

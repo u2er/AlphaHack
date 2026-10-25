@@ -46,6 +46,8 @@ transformers>=4.46,<5
 # Запасной движок parser/pdf.py без docling: текстовый слой и рендер страниц
 # для OCR бинарником tesseract.
 pypdfium2==4.30.0
+# Трассировка LLM в Langfuse (utils/tracing.py); без ключей LANGFUSE_* не включается.
+langfuse==4.17.0
 
 # тесты
 pytest==8.3.4

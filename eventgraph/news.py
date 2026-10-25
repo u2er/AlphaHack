@@ -16,6 +16,7 @@ from eventgraph.config import settings
 from eventgraph.db import SessionLocal
 from eventgraph.models import Connector, Item
 from eventgraph.sources import BY_NAME
+from utils import tracing
 
 if TYPE_CHECKING:
     from eventgraph.graph_settings import GraphSettings
@@ -286,4 +287,6 @@ async def process_next(cfg: "GraphSettings") -> dict[str, Any] | None:
     found = await next_item()
     if found is None:
         return None
-    return await process(*found, cfg)
+    # Все раны по записи (аналитик на каждого клиента, затем news) — одна сессия Langfuse.
+    with tracing.attributes(session_id=found[0].uid, tags=[found[1]]):
+        return await process(*found, cfg)

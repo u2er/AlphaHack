@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 800" width="1280" height="800" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="800" fill="#fff"/>
+
+  <!-- docker compose -->
+  <rect x="300" y="88" width="700" height="622" rx="10" fill="#FAFAFA" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="8 5"/>
+  <text x="314" y="108" font-size="11.5" fill="#555">docker compose · один сервер</text>
+
+  <!-- пользователи -->
+  <rect x="330" y="16" width="300" height="48" rx="8" fill="#F3F4F6" stroke="#9CA3AF" stroke-width="1.2"/>
+  <text x="480" y="36" text-anchor="middle" font-size="15" font-weight="bold" fill="#111">Пользователь, жюри</text>
+  <text x="480" y="54" text-anchor="middle" font-size="12.5" fill="#333">браузер</text>
+  <rect x="670" y="16" width="300" height="48" rx="8" fill="#F3F4F6" stroke="#9CA3AF" stroke-width="1.2"/>
+  <text x="820" y="36" text-anchor="middle" font-size="15" font-weight="bold" fill="#111">API-клиент</text>
+  <text x="820" y="54" text-anchor="middle" font-size="12.5" fill="#333">curl, Swagger /docs</text>
+
+  <!-- gui и api -->
+  <rect x="330" y="122" width="300" height="92" rx="8" fill="#fff" stroke="#333" stroke-width="1.4"/>
+  <text x="346" y="146" font-size="15" font-weight="bold" fill="#111">profile-gui · :8765</text>
+  <text x="346" y="167" font-size="12.5" fill="#333">Интерфейс «Альфа-Бизнес»: лента, карточки,</text>
+  <text x="346" y="185" font-size="12.5" fill="#333">чаты, граф, добавление компании, настройки LLM</text>
+  <text x="346" y="203" font-size="11.5" fill="#555">вход по ключу GUI_ACCESS_KEY</text>
+
+  <rect x="670" y="122" width="300" height="92" rx="8" fill="#fff" stroke="#333" stroke-width="1.4"/>
+  <text x="686" y="146" font-size="15" font-weight="bold" fill="#111">api · :8000</text>
+  <text x="686" y="167" font-size="12.5" fill="#333">FastAPI: источники, лента, граф, профили,</text>
+  <text x="686" y="185" font-size="12.5" fill="#333">сводки и чаты /ai, раны агентов</text>
+  <text x="686" y="203" font-size="11.5" fill="#555">ключ X-Api-Key · OpenAPI /docs</text>
+
+  <!-- worker -->
+  <rect x="330" y="252" width="640" height="210" rx="8" fill="#fff" stroke="#333" stroke-width="1.4"/>
+  <text x="346" y="276" font-size="15" font-weight="bold" fill="#111">worker</text>
+  <text x="410" y="276" font-size="11.5" fill="#555">записи по одной, как только собраны</text>
+
+  <rect x="346" y="292" width="132" height="66" rx="6" fill="#FDECEA" stroke="#EF3124" stroke-width="1.2"/>
+  <text x="412" y="318" text-anchor="middle" font-size="12.5" fill="#333" font-weight="bold">Коннекторы</text>
+  <text x="412" y="336" text-anchor="middle" font-size="11.5" fill="#555">сайты, Telegram,</text>
+  <text x="412" y="350" text-anchor="middle" font-size="11.5" fill="#555">PDF банка</text>
+
+  <rect x="496" y="292" width="140" height="66" rx="6" fill="#FDECEA" stroke="#EF3124" stroke-width="1.2"/>
+  <text x="566" y="318" text-anchor="middle" font-size="12.5" fill="#333" font-weight="bold">Сюжеты, дубли</text>
+  <text x="566" y="336" text-anchor="middle" font-size="11.5" fill="#555">эмбеддер</text>
+  <text x="566" y="350" text-anchor="middle" font-size="11.5" fill="#555">(без LLM)</text>
+
+  <rect x="654" y="292" width="140" height="66" rx="6" fill="#FDECEA" stroke="#EF3124" stroke-width="1.2"/>
+  <text x="724" y="318" text-anchor="middle" font-size="12.5" fill="#333" font-weight="bold">analyst</text>
+  <text x="724" y="336" text-anchor="middle" font-size="11.5" fill="#555">оценка для каждой</text>
+  <text x="724" y="350" text-anchor="middle" font-size="11.5" fill="#555">компании</text>
+
+  <rect x="812" y="292" width="140" height="66" rx="6" fill="#FDECEA" stroke="#EF3124" stroke-width="1.2"/>
+  <text x="882" y="318" text-anchor="middle" font-size="12.5" fill="#333" font-weight="bold">news</text>
+  <text x="882" y="336" text-anchor="middle" font-size="11.5" fill="#555">запись события</text>
+  <text x="882" y="350" text-anchor="middle" font-size="11.5" fill="#555">в граф</text>
+
+  <path d="M478,325 H492" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M636,325 H650" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M794,325 H808" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+
+  <rect x="346" y="378" width="290" height="66" rx="6" fill="#FDECEA" stroke="#EF3124" stroke-width="1.2"/>
+  <text x="491" y="404" text-anchor="middle" font-size="12.5" fill="#333" font-weight="bold">Загрузка при старте</text>
+  <text x="491" y="422" text-anchor="middle" font-size="11.5" fill="#555">базовый граф, профили-примеры,</text>
+  <text x="491" y="436" text-anchor="middle" font-size="11.5" fill="#555">профили из онбординга</text>
+
+  <rect x="654" y="378" width="298" height="66" rx="6" fill="#FDECEA" stroke="#EF3124" stroke-width="1.2"/>
+  <text x="803" y="404" text-anchor="middle" font-size="12.5" fill="#333" font-weight="bold">gardener</text>
+  <text x="803" y="422" text-anchor="middle" font-size="11.5" fill="#555">по расписанию: дубли, островки,</text>
+  <text x="803" y="436" text-anchor="middle" font-size="11.5" fill="#555">обрезка графа</text>
+
+  <!-- тома и searxng -->
+  <rect x="330" y="496" width="300" height="74" rx="8" fill="#fff" stroke="#333" stroke-width="1.4"/>
+  <text x="346" y="520" font-size="15" font-weight="bold" fill="#111">Тома data и profiles</text>
+  <text x="346" y="540" font-size="12.5" fill="#333">модели, кэш PDF, llm-settings.json,</text>
+  <text x="346" y="558" font-size="12.5" fill="#333">ключ GUI, экспорт профилей</text>
+
+  <rect x="670" y="496" width="300" height="74" rx="8" fill="#fff" stroke="#333" stroke-width="1.4"/>
+  <text x="686" y="520" font-size="15" font-weight="bold" fill="#111">searxng · 127.0.0.1:8082</text>
+  <text x="686" y="540" font-size="12.5" fill="#333">метапоиск для web_search</text>
+  <text x="686" y="558" font-size="12.5" fill="#333">агентов analyst и news</text>
+
+  <!-- db -->
+  <rect x="330" y="604" width="640" height="86" rx="8" fill="#fff" stroke="#333" stroke-width="1.4"/>
+  <text x="346" y="628" font-size="15" font-weight="bold" fill="#111">db · Postgres 16 + pgvector · 127.0.0.1:5433</text>
+  <text x="346" y="650" font-size="12.5" fill="#333">записи и оценки · раны и шаги агентов · граф событий с векторами</text>
+  <text x="346" y="668" font-size="12.5" fill="#333">профили компаний · profile_data: CSV приложения 1 и PDF приложения 2</text>
+
+  <!-- внешние -->
+  <rect x="24" y="270" width="236" height="150" rx="8" fill="#F3F4F6" stroke="#9CA3AF" stroke-width="1.2"/>
+  <text x="40" y="294" font-size="15" font-weight="bold" fill="#111">Источники</text>
+  <text x="40" y="316" font-size="12.5" fill="#333">Lenta.ru, RSS «Экономика»</text>
+  <text x="40" y="336" font-size="12.5" fill="#333">Telegram @alfa_investments</text>
+  <text x="40" y="356" font-size="12.5" fill="#333">свои сайты и каналы клиента</text>
+  <text x="40" y="376" font-size="12.5" fill="#333">PDF аналитики Альфа-Банка</text>
+  <text x="40" y="396" font-size="11.5" fill="#555">(приложение 2, ./pdfs)</text>
+
+  <rect x="1024" y="252" width="232" height="104" rx="8" fill="#F3F4F6" stroke="#9CA3AF" stroke-width="1.2"/>
+  <text x="1040" y="276" font-size="15" font-weight="bold" fill="#111">LLM организаторов</text>
+  <text x="1040" y="298" font-size="12.5" fill="#333">OpenAI-совместимый API</text>
+  <text x="1040" y="318" font-size="12.5" fill="#333">модели приложения 3</text>
+  <text x="1040" y="338" font-size="11.5" fill="#555">LLM_* или шестерёнка в GUI</text>
+
+  <rect x="1024" y="496" width="232" height="74" rx="8" fill="#F3F4F6" stroke="#9CA3AF" stroke-width="1.2"/>
+  <text x="1040" y="520" font-size="15" font-weight="bold" fill="#111">Поисковые системы</text>
+  <text x="1040" y="540" font-size="12.5" fill="#333">через SearXNG, страницы</text>
+  <text x="1040" y="558" font-size="12.5" fill="#333">как данные, не инструкции</text>
+
+  <!-- стрелки -->
+  <path d="M480,64 V118" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <text x="488" y="98" font-size="11" fill="#444">HTTPS, ключ доступа</text>
+  <path d="M820,64 V118" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <text x="828" y="98" font-size="11" fill="#444">X-Api-Key</text>
+  <path d="M630,168 H666" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <text x="634" y="160" font-size="11" fill="#444">ключ</text>
+
+  <path d="M260,325 H342" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <text x="270" y="317" font-size="11" fill="#444">сбор</text>
+
+  <path d="M952,325 H1020" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M970,190 H1100 V248" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <text x="1006" y="183" font-size="11" fill="#444">чаты, сводки</text>
+  <path d="M600,214 V234 H1200 V248" fill="none" stroke="#444" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  <text x="1006" y="228" font-size="11" fill="#444">онбординг профиля</text>
+  <text x="958" y="317" font-size="11" fill="#444">агенты</text>
+
+  <path d="M820,462 V492" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M970,533 H1020" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M480,462 V492" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M650,462 V600" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+
+  <!-- мониторинг -->
+  <rect x="1024" y="604" width="232" height="86" rx="8" fill="#fff" stroke="#333" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <text x="1040" y="628" font-size="15" font-weight="bold" fill="#111">Langfuse · 127.0.0.1:3000</text>
+  <text x="1040" y="648" font-size="12.5" fill="#333">трейсы LLM и инструментов</text>
+  <text x="1040" y="666" font-size="11.5" fill="#555">профиль monitoring: web, worker,</text>
+  <text x="1040" y="681" font-size="11.5" fill="#555">ClickHouse, Redis, MinIO, Postgres</text>
+  <path d="M952,444 H1004 V640 H1020" fill="none" stroke="#444" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  <text x="1008" y="600" font-size="11" fill="#444" transform="rotate(-90 1008 600)">трейсы</text>
+  <path d="M330,168 H314 V647 H326" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M970,168 H986 V647 H974" fill="none" stroke="#444" stroke-width="1.4" marker-end="url(#a)"/>
+
+  <!-- подписи -->
+  <text x="24" y="742" font-size="12.5" fill="#333" font-weight="bold">Наружу открыты</text>
+  <text x="146" y="742" font-size="12.5" fill="#333">только интерфейс (:8765, по ключу) и API (:8000, по X-Api-Key); база и SearXNG слушают 127.0.0.1.</text>
+  <text x="24" y="764" font-size="12.5" fill="#333" font-weight="bold">profile-prepare</text>
+  <text x="134" y="764" font-size="12.5" fill="#333">— разовая подготовка библиотеки профиля: docker compose run --rm profile-prepare.</text>
+  <text x="24" y="786" font-size="11.5" fill="#555">Красным — шаги воркера; пунктир — вызовы LLM из интерфейса при добавлении компании.</text>
+</svg>

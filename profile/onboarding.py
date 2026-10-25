@@ -28,6 +28,7 @@ from uuid import uuid4
 import numpy as np
 from pydantic import Field, field_validator
 
+from utils import tracing
 from utils.llm import LLMError, OutputValidationError, generate_structured
 from utils.models import StrictModel, now
 from .contract import (MAIN_PAGE, MAIN_PAGE_LIMIT, FileRef, PageSource, ProfileDocument, ProfilePage,
@@ -515,7 +516,12 @@ class Onboarding:
             self._review_sensitive()
             client = self.client_factory()
             try:
-                self._loop(client)
+                # Весь проход агента — один трейс Langfuse, сессия — этот онбординг.
+                with tracing.attributes(session_id=self.id, user_id=self.form.get('company_id') or None, tags=['onboarding']), \
+                        tracing.observe('onboarding', as_type='agent', input=self.form,
+                                        metadata={'files': len(self.files)}) as span:
+                    self._loop(client)
+                    tracing.update(span, output={'status': self.status})
             finally:
                 close = getattr(client, 'close', None)
                 if close:

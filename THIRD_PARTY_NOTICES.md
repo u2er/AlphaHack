@@ -30,7 +30,7 @@
 | модель | где | лицензия |
 |---|---|---|
 | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | эмбеддер графа, сюжетов, профиля и ранжирования веб-поиска (`EMB_MODEL`, через fastembed/ONNX) | Apache-2.0 |
-| модели разметки страниц и таблиц docling (Docling Models, Hugging Face) | разбор PDF (`docling_parser/`, коннектор `pdf`) | см. карточку модели на Hugging Face |
+| модели docling с Hugging Face: разметка страниц `docling-project/docling-layout-heron`, таблицы `docling-project/docling-models` (TableFormer) | разбор PDF (`docling_parser/`, коннектор `pdf`) | см. карточку модели на Hugging Face |
 | языковые данные Tesseract `rus`, `eng` (пакеты Debian `tesseract-ocr-*`) | OCR сканов | Apache-2.0 |
 
 ## 3. Данные
@@ -41,6 +41,7 @@
 | PDF Центра макроэкономических исследований Альфа-Банка | приложение 2 кейса | коннектор `alfa_analytics` (запись — страница отчёта) и библиотека профиля |
 | `eventgraph/seed/news-graph.json.gz`, `embeddings.npz` | собраны командой из новостей открытых источников (раздел 4) этим же решением | базовый граф на 21.10.2026 и готовые векторы |
 | `eventgraph/seed/profiles/*.json`, `tests/fixtures/profiles/*.json` | синтетические: собраны агентом онбординга из полей приложения 1; ВекторФуд и СибМеталл вымышлены | профили-примеры и тесты |
+| `docs/demo-company/files/*` | синтетические: подготовлены командой для сценария онбординга; компания, люди, контрагенты и цифры вымышлены, согласованы с карточкой U_81081 | сценарий добавления новой компании |
 
 Данные кейса используются только в рамках хакатона и не позволяют
 идентифицировать реальные организации или людей.
@@ -96,6 +97,7 @@
 | tesserocr | >=2.8 | MIT |
 | transformers | >=4.46,<5 | Apache-2.0 |
 | pypdfium2 (с PDFium) | 4.30.0 | Apache-2.0 / BSD-3-Clause |
+| langfuse (SDK трассировки, с OpenTelemetry SDK) | 4.17.0 | MIT; OpenTelemetry — Apache-2.0 |
 | pytest | 8.3.4 | MIT |
 | pytest-asyncio | 0.25.0 | Apache-2.0 |
 | torch, torchvision (CPU-сборка, ставятся в Dockerfile) | 2.14.1+cpu, 0.29.1+cpu в `poetry.lock` | BSD-3-Clause |
@@ -112,3 +114,14 @@ huggingface-hub) приходят с пакетами выше под их со�
 | Tesseract OCR, Leptonica (apt) | из Debian | Apache-2.0 / BSD-2-Clause |
 | `pgvector/pgvector:pg16` — PostgreSQL 16 с pgvector | pg16 | PostgreSQL License |
 | `searxng/searxng` | 2026.10.19-81371861f | AGPL-3.0 |
+
+Мониторинг LLM, профиль `monitoring` (запускается отдельно, без изменений
+образов):
+
+| компонент | версия | лицензия |
+|---|---|---|
+| `langfuse/langfuse`, `langfuse/langfuse-worker` | 4.56.0 | MIT (ядро; функции `ee` не используются) |
+| `clickhouse/clickhouse-server` | 25.12.11 | Apache-2.0 |
+| `postgres` (база Langfuse) | 17.9 | PostgreSQL License |
+| `redis` | 7.4.11 | RSALv2 / SSPLv1 |
+| `bitnamilegacy/minio` — MinIO (хранилище событий Langfuse) | 2025.7.23 | AGPL-3.0 |

@@ -16,6 +16,7 @@ from eventgraph.agents.tools import Tool, ToolContext, build_tools, system_text
 from eventgraph.config import settings
 from eventgraph.db import SessionLocal
 from eventgraph.models import AgentLog, AgentRun
+from utils import tracing
 
 logger = logging.getLogger(__name__)
 
@@ -160,21 +161,45 @@ async def generate(messages: list[dict[str, Any]], tools: list[dict[str, Any]] |
     usage}; провал — {"error": причина}."""
     client = client or _client()
     last: Exception | None = None
-    for attempt in range(max(1, settings.llm_retries)):
-        try:
-            kwargs: dict[str, Any] = {"model": settings.llm_model, "messages": messages, **params}
-            if tools:
-                kwargs["tools"] = tools
-                kwargs["tool_choice"] = "auto"
-            response = await asyncio.wait_for(client.chat.completions.create(**kwargs),
-                                               timeout=settings.llm_timeout)
-            return parse_completion(response)
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            if not _should_retry(exc) or attempt == settings.llm_retries - 1:
-                break
-            await asyncio.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
-    return {"error": _format_error(last)}
+    with tracing.observe("llm", as_type="generation", model=settings.llm_model, input=traced_messages(messages),
+                         model_parameters={k: v for k, v in params.items() if isinstance(v, (str, int, float, bool))},
+                         metadata={"tools": len(tools or [])}) as span:
+        for attempt in range(max(1, settings.llm_retries)):
+            try:
+                kwargs: dict[str, Any] = {"model": settings.llm_model, "messages": messages, **params}
+                if tools:
+                    kwargs["tools"] = tools
+                    kwargs["tool_choice"] = "auto"
+                response = await asyncio.wait_for(client.chat.completions.create(**kwargs),
+                                                   timeout=settings.llm_timeout)
+                parsed = parse_completion(response)
+                usage = parsed["usage"]
+                tracing.update(span, output={"content": parsed["content"], "tool_calls": parsed["tool_calls"],
+                                             "reasoning": parsed["reasoning"]},
+                               usage_details={"input": usage["prompt_tokens"], "output": usage["completion_tokens"]},
+                               metadata={"attempts": attempt + 1})
+                return parsed
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                if not _should_retry(exc) or attempt == settings.llm_retries - 1:
+                    break
+                await asyncio.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+        error = _format_error(last)
+        tracing.update(span, level="ERROR", status_message=error[:500])
+    return {"error": error}
+
+
+def traced_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сообщения для трейса: картинки (data:-URI) заменены пометкой, остальное как есть."""
+    out = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            content = [{"type": "text", "text": "[изображение]"} if part.get("type") == "image_url" else part
+                       for part in content]
+            message = {**message, "content": content}
+        out.append(message)
+    return out
 
 
 def parse_completion(response: Any) -> dict[str, Any]:
@@ -284,19 +309,26 @@ async def execute(run_id: int) -> AgentRun:
     spec = SPECS[agent]
     stats = {"steps": 0, "tool_calls": 0, "tokens_prompt": 0, "tokens_completion": 0}
     started = time.perf_counter()
-    try:
-        outcome = await asyncio.wait_for(
-            _loop(run_id, spec, task, history, attachments, stats, variables), timeout=settings.run_timeout
-        )
-    except asyncio.TimeoutError:
-        outcome = {"status": "error", "error": f"ран не уложился в {settings.run_timeout} с", "output": ""}
-    except asyncio.CancelledError:
-        await _update(run_id, status="stopped", error="воркер остановлен", finished_at=_now(),
-                      duration_ms=int((time.perf_counter() - started) * 1000), **stats)
-        raise
-    except Exception as exc:  # noqa: BLE001 — ран не должен застрять в running
-        logger.exception("ран %s упал", run_id)
-        outcome = {"status": "error", "error": f"{type(exc).__name__}: {exc}", "output": ""}
+    # Ран — корень трейса в Langfuse; шаги модели и инструменты — его дети (контекст
+    # переходит в задачу wait_for вместе с contextvars).
+    with tracing.observe(f"agent:{agent}", as_type="agent", input=task,
+                         metadata={"run_id": run_id, "profile_id": variables.get("profile_id")}) as span:
+        try:
+            outcome = await asyncio.wait_for(
+                _loop(run_id, spec, task, history, attachments, stats, variables), timeout=settings.run_timeout
+            )
+        except asyncio.TimeoutError:
+            outcome = {"status": "error", "error": f"ран не уложился в {settings.run_timeout} с", "output": ""}
+        except asyncio.CancelledError:
+            await _update(run_id, status="stopped", error="воркер остановлен", finished_at=_now(),
+                          duration_ms=int((time.perf_counter() - started) * 1000), **stats)
+            raise
+        except Exception as exc:  # noqa: BLE001 — ран не должен застрять в running
+            logger.exception("ран %s упал", run_id)
+            outcome = {"status": "error", "error": f"{type(exc).__name__}: {exc}", "output": ""}
+        tracing.update(span, output=outcome.get("output") or outcome.get("error"),
+                       level="ERROR" if outcome["status"] == "error" else "DEFAULT",
+                       status_message=outcome.get("error") or None, metadata={"status": outcome["status"], **stats})
     await _update(run_id, finished_at=_now(), duration_ms=int((time.perf_counter() - started) * 1000),
                   **outcome, **stats)
     logger.info("ран %s (%s): %s, шагов %s, вызовов %s%s", run_id, agent, outcome["status"], stats["steps"],
@@ -384,25 +416,29 @@ async def _call_tool(run_id: int, step: int, tools: dict[str, Tool], call: dict[
 
     extra: list[dict[str, Any]] = []
     started = time.perf_counter()
-    try:
-        result = await asyncio.wait_for(tool.handler(**args), timeout=settings.tool_timeout)
-        content = stringify(result)
-        if isinstance(result, _images.ToolResult) and result.images:
-            ready, notes = _images.prepare(list(result.images))
-            note, extra = image_messages(ready, notes, settings.llm_vision)
-            content = f"{content}\n{note}".strip()
-        await _log(run_id, step, "tool", name, args=args, result=content[:LOG_RESULT_CHARS],
-                   ms=int((time.perf_counter() - started) * 1000))
-    except asyncio.TimeoutError:
-        content = f"Tool error: {name} did not finish in {settings.tool_timeout}s"
-        await _log(run_id, step, "error", name, args=args, error=content)
-    except TypeError as exc:
-        # Модель передала аргумент, которого у инструмента нет.
-        content = f"Tool error: {exc}"
-        await _log(run_id, step, "error", name, args=args, error=content)
-    except Exception as exc:  # noqa: BLE001
-        content = f"Tool error: {type(exc).__name__}: {exc}"
-        await _log(run_id, step, "error", name, args=args, error=content)
+    with tracing.observe(name, as_type="tool", input=args, metadata={"step": step}) as span:
+        failed = True
+        try:
+            result = await asyncio.wait_for(tool.handler(**args), timeout=settings.tool_timeout)
+            content = stringify(result)
+            if isinstance(result, _images.ToolResult) and result.images:
+                ready, notes = _images.prepare(list(result.images))
+                note, extra = image_messages(ready, notes, settings.llm_vision)
+                content = f"{content}\n{note}".strip()
+            failed = False
+            await _log(run_id, step, "tool", name, args=args, result=content[:LOG_RESULT_CHARS],
+                       ms=int((time.perf_counter() - started) * 1000))
+        except asyncio.TimeoutError:
+            content = f"Tool error: {name} did not finish in {settings.tool_timeout}s"
+            await _log(run_id, step, "error", name, args=args, error=content)
+        except TypeError as exc:
+            # Модель передала аргумент, которого у инструмента нет.
+            content = f"Tool error: {exc}"
+            await _log(run_id, step, "error", name, args=args, error=content)
+        except Exception as exc:  # noqa: BLE001
+            content = f"Tool error: {type(exc).__name__}: {exc}"
+            await _log(run_id, step, "error", name, args=args, error=content)
+        tracing.update(span, output=content, **({"level": "ERROR", "status_message": content[:500]} if failed else {}))
     return [reply(content), *extra]
 
 
