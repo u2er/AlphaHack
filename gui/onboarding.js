@@ -277,7 +277,7 @@ function renderFiles() {
   const status = { parsing: 'разбираю…', ready: 'готов', error: 'ошибка', removed: 'убран' };
   list.replaceChildren(...session.files.map(f => {
     const row = el('div', '', `file-row file-${f.status}`);
-    row.append(el('b', f.filename), el('small', `${f.kind} · ${Math.max(1, Math.round(f.size / 1024))} КБ · ${status[f.status]}${f.pages ? ` · ${f.pages} стр.` : ''}${f.error ? ` — ${f.error}` : ''}`));
+    row.append(el('b', f.filename), el('small', `${f.kind} · ${Math.max(1, Math.round(f.size / 1024))} КБ · ${status[f.status]}${f.pages ? ` · ${f.pages} стр.` : ''}${f.images ? ` · изобр.: ${f.images}` : ''}${f.error ? ` — ${f.error}` : ''}`));
     const hidden = Object.values(f.redactions || {}).reduce((a, b) => a + b, 0);
     if (hidden) row.append(el('small', `скрыто чувствительных данных: ${hidden}`, 'privacy-badge'));
     return row;

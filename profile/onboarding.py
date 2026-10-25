@@ -43,6 +43,8 @@ MAX_PAGES = 8
 ANSWER_TIMEOUT = 3600
 RESERVED = {MAIN_PAGE, 'dataset', 'dialog', 'signals'}
 RESULT_CHARS = 3500
+# Сколько картинок страницы read_file показывает модели со зрением за один шаг.
+PAGE_IMAGES = 8
 # Выбор пользователя для найденных в файлах персональных и конфиденциальных данных.
 PRIVACY_HIDE, PRIVACY_KEEP, PRIVACY_DROP = 'Скрыть найденное (рекомендуется)', 'Оставить как есть', 'Убрать эти файлы'
 PRIVACY_OPTIONS = [PRIVACY_HIDE, PRIVACY_KEEP, PRIVACY_DROP]
@@ -73,6 +75,8 @@ SYSTEM = '''Ты собираешь страничный профиль комп
 
 Инструменты (одно действие за шаг):
 - search_files(query) — поиск по приложенным файлам компании; read_file(file_id, page) — страница файла;
+  «[изображение N]» в тексте — картинка из файла (скриншот, схема, график). Если у файла есть image_pages,
+  read_file такой страницы покажет её картинки в следующем шаге — только в нём, запомни нужное;
 - ask(question) — вопрос пользователю, только о существенном пробеле, которого нет в анкете и файлах.
   kind: single (один вариант), multi (несколько), text (свободный ответ). Для single/multi дай 2–7
   конкретных вариантов; поле «Своё» для ответа своими словами интерфейс добавляет сам — не включай
@@ -154,6 +158,8 @@ class UploadedFile(StrictModel):
     findings: list[dict] = Field(default_factory=list)
     # Сколько чего скрыто в pages: вид → число.
     redactions: dict[str, int] = Field(default_factory=dict)
+    # Картинок, которые увидит модель со зрением (без зрения — 0).
+    images: int = 0
 
 
 def _clip(text: str, limit: int) -> str:
@@ -166,18 +172,22 @@ class Onboarding:
     the HTTP handlers read the state and push answers, edits and files."""
 
     def __init__(self, store, client_factory, run_dir: Path, trace=None, embedder=None, parse=None,
-                 max_questions=MAX_QUESTIONS):
+                 max_questions=MAX_QUESTIONS, vision=False):
         self.id = run_dir.name
         # 0 — без вопросов: профиль-пример собирается из анкеты и набора банка без пользователя.
         self.max_questions = max_questions
         self.store, self.client_factory, self.run_dir, self.trace = store, client_factory, Path(run_dir), trace
         self.embedder = embedder
         self.parse = parse
+        # Модель видит картинки: они уходят ей как есть, а не только текстом OCR.
+        self.vision = vision
         self.lock = threading.RLock()
         self.files: dict[str, UploadedFile] = {}
         self._file_index: dict[str, tuple[list[tuple[str, int, str]], np.ndarray | None]] = {}
         # Исходный текст файлов с находками — только в памяти и только до выбора пользователя.
         self._raw_pages: dict[str, list[str]] = {}
+        # Картинки файлов для модели со зрением: файл → страница → data URI.
+        self._images: dict[str, dict[int, list[str]]] = {}
         self.form: dict = {}
         self.company: dict = {}
         self.signals: dict = {}
@@ -244,7 +254,9 @@ class Onboarding:
             parse = self.parse
             if parse is None:
                 from parser.documents import parse_upload as parse
-            raw = [p['text'] for p in parse(path)['pages']]
+            parsed = parse(path, images=True) if self.vision else parse(path)
+            raw = [p['text'] for p in parsed['pages']]
+            pictures = self._pictures(file_id, parsed['pages']) if self.vision else {}
             # Чувствительное скрывается до чанков, векторов и LLM; исходник остаётся в памяти,
             # только если пользователю есть что выбирать (не одни секреты).
             found = [(n, sensitive.scan(text)) for n, text in enumerate(raw, 1)]
@@ -254,6 +266,8 @@ class Onboarding:
             with self.lock:
                 file = self.files[file_id]
                 file.findings, file.redactions = findings, sensitive.counts(findings)
+                file.images = sum(len(v) for v in pictures.values())
+                self._images[file_id] = pictures
                 if any(f['category'] != 'secret' for f in findings):
                     self._raw_pages[file_id] = raw
             if findings and self.trace:
@@ -267,6 +281,19 @@ class Onboarding:
             # Исходный файл не храним: его текст (уже со скрытыми данными) — в pages, хэш — в sha256.
             if not os.environ.get('KEEP_UPLOADS'):
                 Path(path).unlink(missing_ok=True)
+
+    @staticmethod
+    def _pictures(file_id, pages):
+        """Картинки страниц в том виде, что принимает модель: не больше 1568 px, JPEG или PNG."""
+        from eventgraph.agents import images as pics
+        out = {}
+        for n, page in enumerate(pages, 1):
+            for data in page.get('images') or []:
+                try:
+                    out.setdefault(n, []).append(pics.data_uri(pics.normalize(pics.ToolImage(data=data))))
+                except pics.ImageError as exc:
+                    log.warning('Картинка со стр. %d файла %s пропущена: %s', n, file_id, exc)
+        return out
 
     def _index(self, file_id, pages):
         chunks = [(file_id, n, text[i:i + 900]) for n, text in enumerate(pages, 1)
@@ -426,8 +453,9 @@ class Onboarding:
                 self._index(f.id, pages)
             elif choice == PRIVACY_DROP:
                 with self.lock:
-                    f.status, f.pages = 'removed', []
+                    f.status, f.pages, f.images = 'removed', [], 0
                     self._file_index.pop(f.id, None)
+                    self._images.pop(f.id, None)
         self._raw_pages.clear()
         if self.trace:
             self.trace.record('sensitive_choice', choice=choice, files=[f.id for f in choosable])
@@ -448,11 +476,17 @@ class Onboarding:
             if f.status == 'error':
                 self.say('activity', 'text', f'Файл «{f.filename}» прочитать не удалось: {f.error}')
             else:
-                self.say('activity', 'text', f'Прочитал «{f.filename}»: {len(f.pages)} стр.')
+                pictures = f', изображений: {f.images}' if f.images else ''
+                self.say('activity', 'text', f'Прочитал «{f.filename}»: {len(f.pages)} стр.{pictures}')
+        if any(f.images for f in self.files.values()):
+            self.say('agent', 'redaction', 'Картинки из документов модель увидит как есть: данные на них '
+                     'автоматически не скрываются.')
 
     def _context(self, history, steps_left, questions_left):
         files = [{'id': f.id, 'filename': f.filename, 'kind': f.kind, 'pages': len(f.pages),
-                  'preview': _clip(f.pages[0] if f.pages else '', 700)} for f in self.files.values() if f.status == 'ready']
+                  'preview': _clip(f.pages[0] if f.pages else '', 700)}
+                 | ({'image_pages': sorted(self._images[f.id])} if self._images.get(f.id) else {})
+                 for f in self.files.values() if f.status == 'ready']
         dataset = None
         if self.company:
             dataset = {'facts': {k: v for k, v in self.company.items() if k != '_conflicts'},
@@ -493,7 +527,8 @@ class Onboarding:
             self.say('agent', 'error', f'Не получилось собрать профиль: {str(exc)[:300]}. Можно начать заново.')
 
     def _loop(self, client):
-        history, questions = [], 0
+        # shown — картинки, которые read_file показывает модели в следующем шаге.
+        history, questions, shown = [], 0, []
         for step in range(MAX_STEPS):
             def validate(action):
                 if action.tool == 'search_files' and not action.query.strip():
@@ -514,7 +549,9 @@ class Onboarding:
                     self._check_draft(action.draft)
             action = generate_structured(client, SYSTEM, self._context(history, MAX_STEPS - step,
                                                                        self.max_questions - questions),
-                                         OnboardingAction, validate=validate, on_attempt=validation_trace(client))
+                                         OnboardingAction, validate=validate, on_attempt=validation_trace(client),
+                                         images=shown)
+            shown = []
             if action.note.strip() and action.tool != 'ask':
                 self.say('activity', 'text', action.note.strip(), tool=action.tool, query=action.query)
             if action.tool == 'ask':
@@ -526,6 +563,12 @@ class Onboarding:
                 file = self.files[action.file_id]
                 result = {'ref': f'file:{file.id}:{action.page}', 'file': file.filename, 'page': action.page,
                           'text': file.pages[action.page - 1][:RESULT_CHARS]}
+                pictures = self._images.get(file.id, {}).get(action.page, [])
+                if pictures:
+                    shown = pictures[:PAGE_IMAGES]
+                    rest = len(pictures) - len(shown)
+                    result['images'] = (f'{len(shown)} изобр. этой страницы приложены к следующему запросу по порядку '
+                                        'меток «[изображение N]»' + (f'; ещё {rest} не показаны' if rest > 0 else ''))
             else:
                 self._finish(action.draft)
                 return

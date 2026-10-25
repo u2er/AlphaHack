@@ -19,9 +19,12 @@ DEFAULT = object()
 
 
 class Controller:
-    def __init__(self, store=None, client_factory=None, runs_dir=RUNS, embedder=DEFAULT, parse=None):
+    def __init__(self, store=None, client_factory=None, runs_dir=RUNS, embedder=DEFAULT, parse=None, vision=None):
         self.store = store or Store()
         self.client_factory = client_factory or (lambda: make_client(settings()))
+        # None — как в настройках LLM (LLM_VISION или шестерёнка), читается при каждой новой сессии;
+        # с подставной моделью (тесты) — без зрения.
+        self.vision = vision if vision is not None or client_factory is None else False
         # None — files are searched by words only (tests, no model at hand).
         self.embedder = SharedEmbedder() if embedder is DEFAULT else embedder
         self.parse = parse
@@ -74,10 +77,18 @@ class Controller:
         run_dir.mkdir(parents=True, mode=0o700)
         trace = ProfileTrace(run_dir/'trace.jsonl')
         session = Onboarding(TracedStore(self.store, trace), lambda: TracedClient(self.client_factory(), trace),
-                             run_dir, trace=trace, embedder=self.embedder, parse=self.parse)
+                             run_dir, trace=trace, embedder=self.embedder, parse=self.parse, vision=self._vision())
         with self.lock:
             self.sessions[session_id] = session
         return session
+
+    def _vision(self):
+        if self.vision is not None:
+            return self.vision
+        try:
+            return settings().vision
+        except ValueError:  # битый LLM_PARAMS — об этом скажет первый запрос к модели
+            return False
 
     def get(self, session_id):
         with self.lock:

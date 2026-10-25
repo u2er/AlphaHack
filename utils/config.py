@@ -21,6 +21,8 @@ class Settings(StrictModel):
     # reasoning tokens on the profile overview, so 5500 cut answers off.
     max_tokens: int = 16000
     extra_body: dict = {}
+    # The model sees images: onboarding then shows it the pictures of the attached files.
+    vision: bool = False
 
 
 def _env(*names: str, default: str = "", override: str = "") -> str:
@@ -50,6 +52,7 @@ def settings() -> Settings:
         timeout_seconds=float(_env("LLM_TIMEOUT", "LLM_TIMEOUT_SECONDS", default="300", override="timeout")),
         max_tokens=int(_env("LLM_MAX_TOKENS", default="16000", override="max_tokens")),
         extra_body=extra,
+        vision=_env("LLM_VISION", default="false", override="vision").lower() in {"1", "true", "yes", "on"},
     )
 
 

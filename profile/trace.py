@@ -27,12 +27,15 @@ class TracedClient:
         self.provider = getattr(client,'provider','test')
         self.model = getattr(client,'model','test')
 
-    def complete_structured(self, system, payload, response_model):
+    def complete_structured(self, system, payload, response_model, images=()):
         call_id = str(uuid4())
+        # Pictures are recorded by size only: the trace never holds their pixels.
+        shown = {'images':[f'{len(url)} chars' for url in images]} if images else {}
         self.trace.record('llm_request',call_id=call_id,provider=self.provider,model=self.model,
-                          response_schema=response_model.__name__,system=system,payload=payload)
+                          response_schema=response_model.__name__,system=system,payload=payload,**shown)
         try:
-            result = self.client.complete_structured(system,payload,response_model)
+            extra = {'images':list(images)} if images else {}
+            result = self.client.complete_structured(system,payload,response_model,**extra)
         except Exception as exc:
             self.trace.record('llm_error',call_id=call_id,error_type=type(exc).__name__,
                               error=str(exc) if type(exc).__name__ == 'LLMError' else 'Model call failed')
