@@ -6,9 +6,11 @@
 const $ = id => document.getElementById(id);
 const el = (tag, text = '', className = '') => { const n = document.createElement(tag); if (text) n.textContent = text; if (className) n.className = className; return n; };
 
+// [фильтр, цвет, ярлык одного узла]
 const TYPES = {
-  event: ['События', '#ef3124'], org: ['Организации', '#0b1f35'], person: ['Люди', '#5b4fd6'],
-  place: ['Места', '#13a454'], topic: ['Темы', '#c77700'], outlet: ['Издания', '#7a8794'], other: ['Прочее', '#b4bcc5'],
+  event: ['События', '#ef3124', 'Событие'], org: ['Организации', '#0b1f35', 'Организация'], person: ['Люди', '#5b4fd6', 'Человек'],
+  place: ['Места', '#13a454', 'Место'], topic: ['Темы', '#c77700', 'Тема'], outlet: ['Издания', '#7a8794', 'Издание'],
+  other: ['Прочее', '#b4bcc5', 'Прочее'],
 };
 const EDGE_NAMES = { involves: 'участвует', about: 'о', reported_by: 'сообщил', in: 'где', develops: 'развитие', covers: 'освещает',
   works_at: 'работает в', contradicts: 'противоречит', part_of: 'часть', leads: 'возглавляет' };
@@ -20,10 +22,14 @@ let data = null, loadedAt = 0, byId = new Map(), adjacency = new Map(), degree =
 let nodes = [], links = [], hidden = new Set(['outlet']), selected = null, hover = null;
 let view = { x: 0, y: 0, k: 1 }, raf = null, heat = 0, loading = null, fitPending = false, fitFocus = null;
 let graphConversation = [], graphChatSending = false, graphChatStatus = '', graphChatTimer = null, graphChatBound = false;
+// Компания из переключателя и оценки аналитика для неё: узел -> важность 0–5.
+let client = { id: null, name: '' }, clientImportance = new Map();
 const canvas = () => $('graphCanvas');
 
 const typeOf = n => TYPES[n.meta.type] ? n.meta.type : 'other';
 const label = n => n.name.length > 60 ? n.name.slice(0, 58) + '…' : n.name;
+// Важность — только для выбранной компании; где аналитик её не оценивал, её нет.
+const importanceOf = n => clientImportance.get(n.id) ?? 0;
 
 async function load() {
   // Граф растёт (агент новостей, базовый снимок): выгрузка старше минуты — заново.
@@ -72,6 +78,7 @@ function show(ids, focus = null, max = MAX_VISIBLE) {
 function latest() {
   const events = data.nodes.filter(n => n.meta.type === 'event').sort((a, b) =>
     String(b.meta.date || '').localeCompare(String(a.meta.date || '')) || (b.meta.importance || 0) - (a.meta.importance || 0));
+  // Что показать, решает общая значимость события; на экране его важность — только для компании.
   const chosen = events.filter(n => (n.meta.importance || 0) >= 2).slice(0, 35);
   const ids = new Set(chosen.map(n => n.id));
   for (const n of chosen) for (const { id } of (adjacency.get(n.id) || []).slice(0, 6)) ids.add(id);
@@ -294,7 +301,7 @@ function fit() {
 function radius(p) {
   // Во всём графе узел — постоянного размера на экране, иначе при отдалении он меньше пикселя.
   if (limit === Infinity) return (2 + Math.min(7, Math.sqrt(degree.get(p.id) || 1) * 0.8)) / Math.max(view.k, 0.05);
-  return 4 + Math.min(10, Math.sqrt(degree.get(p.id) || 1) * 1.3) + (p.node.meta.importance || 0) * 0.8;
+  return 4 + Math.min(10, Math.sqrt(degree.get(p.id) || 1) * 1.3) + importanceOf(p.node) * 0.8;
 }
 
 function draw() {
@@ -402,9 +409,10 @@ async function renderSide() {
   if (!selected) return renderGraphChatPanel(side);
   const n = selected.node, m = n.meta, type = typeOf(n);
   side.replaceChildren();
-  const tag = el('span', TYPES[type][0].replace(/и$|ы$/, ''), 'chip'); tag.style.background = TYPES[type][1]; tag.style.color = '#fff';
+  const tag = el('span', TYPES[type][2], 'chip'); tag.style.background = TYPES[type][1]; tag.style.color = '#fff';
   side.append(tag, el('h3', n.name));
-  const facts = [m.date && `дата: ${m.date}`, m.importance && `важность: ${m.importance}/5`, m.role, m.about,
+  const importance = clientImportance.has(n.id) && `важность для ${client.name || 'компании'}: ${clientImportance.get(n.id)}/5`;
+  const facts = [m.date && `дата: ${m.date}`, importance, m.role, m.about,
     m.topics?.length && `темы: ${m.topics.join(', ')}`, m.sources_count && `публикаций: ${m.sources_count}`].filter(Boolean);
   if (facts.length) side.append(el('p', facts.join(' · '), 'muted'));
   if (m.summary) side.append(el('p', m.summary));
@@ -449,6 +457,20 @@ async function open() {
   else draw();
 }
 
-window.AlfaGraph = { open, bench: (runs = 20) => { const t = performance.now(); for (let i = 0; i < runs; i++) repel(); return Math.round((performance.now() - t) / runs * 10) / 10; }, state: () => ({ nodes: nodes.length, links: links.length, view: { ...view }, heat,
+// Вызывается переключателем компаний (bank.js): подграф не перестраивается,
+// меняются размеры узлов и важность в карточке.
+async function setClient(id, name) {
+  client = { id, name: name || '' };
+  let importance = new Map();
+  try {
+    const r = await fetch(`/api/insights/profiles/${encodeURIComponent(id)}/event-importance`);
+    const body = await r.json(); if (r.ok) importance = new Map(Object.entries(body.importance || {}));
+  } catch { /* без оценок остаётся общая важность */ }
+  if (client.id !== id) return;
+  clientImportance = importance;
+  if (data && nodes.length) { renderSide(); draw(); }
+}
+
+window.AlfaGraph = { open, setClient, bench: (runs = 20) => { const t = performance.now(); for (let i = 0; i < runs; i++) repel(); return Math.round((performance.now() - t) / runs * 10) / 10; }, state: () => ({ nodes: nodes.length, links: links.length, view: { ...view }, heat,
   box: nodes.length ? [Math.min(...nodes.map(n => n.x)), Math.max(...nodes.map(n => n.x)), Math.min(...nodes.map(n => n.y)), Math.max(...nodes.map(n => n.y))].map(Math.round) : [] }) };
 })();

@@ -337,6 +337,10 @@ async def execute(run_id: int) -> AgentRun:
         return await session.get(AgentRun, run_id)
 
 
+LAST_STEP_NOTE = ("Шаги закончились, инструменты больше недоступны. Ответь сейчас по тому, что уже нашёл; "
+                  "если нужного в найденном нет — так и скажи и предложи, как переформулировать вопрос.")
+
+
 async def _loop(run_id: int, spec: AgentSpec, task: str, prior: list[dict[str, Any]],
                 attachments: dict[str, str], stats: dict[str, int],
                 variables: dict[str, str] | None = None) -> dict[str, Any]:
@@ -356,12 +360,15 @@ async def _loop(run_id: int, spec: AgentSpec, task: str, prior: list[dict[str, A
                  if t.get("role") in ("user", "assistant") and t.get("content")]
     messages.append({"role": "user", "content": task})
 
-    for _ in range(spec.max_steps):
+    for attempt in range(spec.max_steps):
         if await _cancelled(run_id):
             return {"status": "stopped", "output": "", "error": ""}
         stats["steps"] += 1
         step = stats["steps"]
-        response = await generate(messages, schemas, params)
+        last = spec.answer_on_last_step and attempt == spec.max_steps - 1
+        if last:
+            messages.append({"role": "user", "content": LAST_STEP_NOTE})
+        response = await generate(messages, None if last else schemas, params)
         if response.get("error"):
             await _log(run_id, step, "error", error=response["error"])
             return {"status": "error", "error": response["error"], "output": ""}

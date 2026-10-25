@@ -128,6 +128,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(200,{'profiles':insights.profiles()})
             if len(parts) == 2 and parts[0] == 'profiles':
                 return self.json(200,insights.profile(parts[1]))
+            if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'event-importance':
+                return self.json(200,insights.event_importance(parts[1]))
             if len(parts) == 3 and parts[0] == 'profiles' and parts[2] == 'feed':
                 importance = min(max(int(query.get('min_importance',['1'])[0]),0),5)
                 return self.json(200,{'items':insights.feed(parts[1],importance)})

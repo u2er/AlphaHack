@@ -30,6 +30,10 @@ class AgentSpec:
     web: bool = False
     # Графовые инструменты доступны по умолчанию, кроме однократных сводок.
     graph_read: bool = True
+    # Последний шаг — без инструментов: агент отвечает по тому, что нашёл, а не
+    # падает с «за N шагов не дал ответа». Только для чатов: у агентов разбора
+    # финал — вердикт после записи в граф, обрезанный ран честнее повторить.
+    answer_on_last_step: bool = False
 
     @property
     def prompt(self) -> str:
@@ -53,10 +57,11 @@ SPECS: dict[str, AgentSpec] = {
     # Перед разбором оценивает запись для компании; граф только читает.
     "analyst": AgentSpec("analyst", "analyst.md", max_steps=30, temperature=0.2, web=True),
     "summarizer": AgentSpec("summarizer", "news-summary.md", max_steps=1, temperature=0.1, graph_read=False),
-    "news_chat": AgentSpec("news_chat", "news-chat.md", max_steps=5, temperature=0.2,
-                           max_history=6, drop_tool_history=True),
-    "graph_chat": AgentSpec("graph_chat", "graph-chat.md", max_steps=8, temperature=0.2,
-                            max_history=8, drop_tool_history=True, graph_overview=True),
+    "news_chat": AgentSpec("news_chat", "news-chat.md", max_steps=30, temperature=0.2,
+                           max_history=6, drop_tool_history=True, answer_on_last_step=True),
+    "graph_chat": AgentSpec("graph_chat", "graph-chat.md", max_steps=30, temperature=0.2,
+                            max_history=8, drop_tool_history=True, graph_overview=True,
+                            answer_on_last_step=True),
 }
 
 

@@ -146,7 +146,7 @@ class Insights:
 
     def graph_chat(self, message, history):
         return self._call('POST', '/ai/graph-chat',
-                          body={'message': message, 'history': history}, timeout=180)
+                          body={'message': message, 'history': history}, timeout=600)
 
     def profile(self, profile_id):
         """Name, role, the main page and the table of contents of a paged profile."""
@@ -188,6 +188,9 @@ class Insights:
         with self._lock:
             self._fragments[item['uid']] = fragments
         return fragments
+
+    def event_importance(self, profile_id):
+        return self._get(f'/profiles/{profile_id}/event-importance')
 
     def feed(self, profile_id, min_importance=1, limit=30):
         items = self._get(f'/profiles/{profile_id}/feed', min_importance=min_importance, limit=limit)

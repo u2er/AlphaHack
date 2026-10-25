@@ -124,6 +124,33 @@ async def test_max_steps_without_an_answer_is_an_error(loop):
     assert outcome == {"status": "error", "output": "", "error": "за 3 шагов агент не дал ответа"}
 
 
+async def test_chat_answers_on_the_last_step_without_tools(loop, monkeypatch):
+    async def tick():
+        return {"n": len(loop["seen"])}
+
+    offered = []
+    fake = runner.generate
+
+    async def generate(messages, tools, params, client=None):
+        offered.append(tools)
+        return await fake(messages, tools, params, client)
+
+    monkeypatch.setattr(runner, "generate", generate)
+    loop["tools"] = [Tool("tick", "", {"type": "object"}, tick)]
+    loop["answers"] = [answer(calls=[call("tick", {})]) for _ in range(2)] + [answer("В графе этого нет.")]
+    outcome, stats = await run_loop(loop, max_steps=3, answer_on_last_step=True)
+    assert outcome == {"status": "done", "output": "В графе этого нет.", "error": ""}
+    assert offered[0] and offered[1] and offered[2] is None
+    assert loop["seen"][2][-1] == {"role": "user", "content": runner.LAST_STEP_NOTE}
+    assert stats["steps"] == 3
+
+
+def test_chats_get_thirty_steps_and_a_final_answer():
+    for name in ("graph_chat", "news_chat"):
+        assert SPECS[name].max_steps == 30 and SPECS[name].answer_on_last_step, name
+    assert not SPECS["news"].answer_on_last_step
+
+
 async def test_model_failure_ends_the_run(loop):
     loop["answers"] = [{"error": "Provider returned 401: bad key"}]
     outcome, _ = await run_loop(loop)

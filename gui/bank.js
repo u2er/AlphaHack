@@ -95,6 +95,7 @@ async function selectClient(id) {
   try { current = await api(`/api/insights/profiles/${encodeURIComponent(id)}`); }
   catch (error) { notice(error.message, true); return; }
   renderProfileHeader();
+  window.AlfaGraph?.setClient(current.id, current.name);
   if (tab === 'sources' && connectors.length) drawSources();
   await loadFeed(true);
 }
@@ -113,7 +114,7 @@ function renderProfilePage() {
     return box.replaceChildren(empty);
   }
   $('profileTitle').textContent = current.name;
-  const pages = [{ id: 'main', title: 'Основное', summary: 'Агенты видят всегда', content: current.main }, ...current.toc];
+  const pages = [{ id: 'main', title: 'Основное', content: current.main }, ...current.toc];
   window.Alfa.pager(box, {
     pages,
     load: async page => page.content ?? (await api(`/api/insights/profiles/${encodeURIComponent(current.id)}/pages/${encodeURIComponent(page.id)}`)).content,
@@ -315,7 +316,7 @@ async function createSummary() {
   if (!current || summaryLoading) return;
   const button = $('summarizeButton'), filters = summaryFilters();
   selected = null;
-  summaryLoading = true; button.disabled = true; button.textContent = 'Суммирую…';
+  summaryLoading = true; button.disabled = true; button.textContent = 'Суммаризирую…';
   renderFeed();
   try {
     currentSummary = await post(`/api/insights/summaries/${encodeURIComponent(current.id)}`, filters);

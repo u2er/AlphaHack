@@ -127,7 +127,7 @@ function pager(box, { pages, load, editable = false, mainLimit = 4000, onSave })
     pages.forEach(page => {
       const b = el('button', '', 'toc-item' + (page.id === selected ? ' on' : '')); b.type = 'button';
       b.append(el('b', page.title));
-      const meta = [page.id === 'main' ? 'видят всегда' : '', ORIGIN[page.origin] || '', page.chars ? `${Math.round(page.chars / 1000 * 10) / 10} тыс. зн.` : ''].filter(Boolean).join(' · ');
+      const meta = [ORIGIN[page.origin] || '', page.chars ? `${Math.round(page.chars / 1000 * 10) / 10} тыс. зн.` : ''].filter(Boolean).join(' · ');
       if (meta) b.append(el('small', meta));
       b.onclick = () => { if (editing && !confirm('Есть несохранённые правки. Уйти со страницы?')) return; selected = page.id; editing = false; render(); };
       toc.append(b);

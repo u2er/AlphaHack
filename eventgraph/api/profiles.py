@@ -10,9 +10,10 @@ from sqlalchemy import Integer, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from eventgraph import analyst, profiles
+from eventgraph.config import settings
 from eventgraph.db import get_session
 from eventgraph.deps import require_auth
-from eventgraph.models import CompanyProfile, Connector, Item
+from eventgraph.models import CompanyProfile, Connector, GraphElement, GraphItem, Item
 from eventgraph.sources import everything
 from profile.contract import ProfileDocument, load_profile, table_of_contents
 from utils.config import settings as llm_settings
@@ -220,3 +221,27 @@ async def feed(
             analysis=analyst.by_profile(item.analysis)[profile_id],
         ))
     return out
+
+
+@router.get("/{profile_id}/event-importance")
+async def event_importance(profile_id: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Важность узлов графа для клиента: наибольшая оценка аналитика среди
+    записей, разобранных в узел. Запись ведёт к узлу по итогу разбора
+    (`outcome.event` — имя события) или публикацией, прикреплённой к узлу.
+    Узлов без оценок для клиента в ответе нет."""
+    if profile_id != profiles.DEFAULT_ID:
+        await _get(session, profile_id)
+    in_graph = (GraphElement.graph == settings.graph_name, GraphElement.kind == "node")
+    by_outcome = (select(GraphElement.id, Item.analysis).select_from(Item)
+                  .join(GraphElement, GraphElement.name == Item.outcome["event"].astext).where(*in_graph))
+    by_source = (select(GraphItem.element_id, Item.analysis)
+                 .join(GraphElement, GraphElement.id == GraphItem.element_id)
+                 .join(Item, Item.uid == GraphItem.data["item_uid"].astext)
+                 .where(*in_graph, GraphItem.type == "source"))
+    rows = [*(await session.execute(by_outcome)).all(), *(await session.execute(by_source)).all()]
+    out: dict[str, int] = {}
+    for element_id, analysis in rows:
+        value = analyst.by_profile(analysis).get(profile_id, {}).get("importance")
+        if isinstance(value, int) and value > out.get(element_id, -1):
+            out[element_id] = value
+    return {"profile_id": profile_id, "graph": settings.graph_name, "importance": out}
