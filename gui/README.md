@@ -24,7 +24,7 @@
 
 ## Запуск
 
-В compose интерфейс поднимается вместе с остальным (`eventgraph-profile-gui`, http://127.0.0.1:8765, порт — `PROFILE_GUI_PORT`). Поиск компании в наборе банка требует библиотеки компаний: если её нет, интерфейс при старте сам загружает CSV приложения 1 в `profile_data` (около минуты; пока идёт загрузка, поиск отвечает «загружается»). Вручную — `docker compose run --rm profile-prepare --companies-only`, см. `profile/db/README.md`.
+В compose интерфейс поднимается вместе с остальным (`eventgraph-profile-gui`, `http://<сервер>:8765`, порт — `PROFILE_GUI_PORT`; на стенде — https://eventgraph.torq.digital). Поиск компании в наборе банка требует библиотеки компаний: если её нет, интерфейс при старте сам загружает CSV приложения 1 в `profile_data` (около минуты; пока идёт загрузка, поиск отвечает «загружается»). Вручную — `docker compose run --rm profile-prepare --companies-only`, см. `profile/db/README.md`.
 
 С хоста, из корня репозитория:
 
