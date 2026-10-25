@@ -98,6 +98,7 @@ function expand(id) {
 
 function renderGraphChat() {
   const box = $('graphChatMessages');
+  if (!box) return;
   box.replaceChildren();
   if (!graphConversation.length) {
     const welcome = el('div', '', 'news-chat-message assistant');
@@ -124,8 +125,11 @@ function renderGraphChat() {
   };
   requestAnimationFrame(scrollToLatest);
   setTimeout(scrollToLatest, 350);
-  $('graphChatSend').disabled = graphChatSending;
-  $('graphChatSend').textContent = graphChatSending ? 'Отвечаю…' : 'Отправить';
+  const send = $('graphChatSend');
+  if (send) {
+    send.disabled = graphChatSending;
+    send.textContent = graphChatSending ? 'Отвечаю…' : 'Отправить';
+  }
 }
 
 async function askGraph(question = null) {
@@ -143,7 +147,8 @@ async function askGraph(question = null) {
   clearInterval(graphChatTimer);
   graphChatTimer = setInterval(() => {
     graphChatStatus = statuses[++statusIndex % statuses.length];
-    const status = $('graphChatMessages').querySelector('.agent-status');
+    const box = $('graphChatMessages');
+    const status = box?.querySelector('.agent-status');
     if (status) status.textContent = graphChatStatus;
   }, 3500);
   try {
@@ -170,18 +175,56 @@ async function askGraph(question = null) {
 function bindGraphChat() {
   if (graphChatBound) return;
   graphChatBound = true;
-  const dialog = $('graphChatDialog');
-  $('graphChatOpen').onclick = () => { renderGraphChat(); dialog.showModal(); $('graphChatInput').focus(); };
-  $('graphChatClose').onclick = () => dialog.close();
-  $('graphChatForm').onsubmit = event => { event.preventDefault(); askGraph(); };
-  $('graphChatInput').addEventListener('keydown', event => {
+  $('graphChatOpen').onclick = () => {
+    selected = null;
+    renderSide();
+    $('graphChatInput')?.focus();
+  };
+}
+
+function renderGraphChatPanel(side) {
+  const header = el('div', '', 'graph-chat-head');
+  header.append(el('h3', 'Обсуждение графа'));
+  header.append(el('p', 'События, противоречия и связи во всём графе.', 'muted'));
+  const prompts = el('div', '', 'graph-chat-prompts');
+  const questions = [
+    ['Актуальные события', 'Назови самые актуальные события графа. Для каждого укажи дату и доступные подтверждения.'],
+    ['Противоречия', 'Найди противоречивые новости в графе. Сопоставь версии и объясни, какая лучше подтверждена, не опираясь только на число публикаций.'],
+    ['Связанные узлы', 'Какие узлы связаны с наибольшим числом событий? Укажи число и несколько примеров связанных событий.'],
+  ];
+  for (const [label, question] of questions) {
+    const button = el('button', label, 'secondary graph-chat-prompt');
+    button.type = 'button';
+    button.onclick = () => askGraph(question);
+    prompts.append(button);
+  }
+  const messages = el('div', '', 'news-chat-messages graph-chat-messages');
+  messages.id = 'graphChatMessages';
+  messages.setAttribute('role', 'log');
+  messages.setAttribute('aria-live', 'polite');
+  const form = el('form', '', 'news-chat-form graph-chat-form');
+  form.id = 'graphChatForm';
+  const input = el('textarea');
+  input.id = 'graphChatInput';
+  input.rows = 3;
+  input.maxLength = 4000;
+  input.placeholder = 'Спросите о графе событий…';
+  input.setAttribute('aria-label', 'Сообщение агенту графа');
+  input.required = true;
+  input.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
-      $('graphChatForm').requestSubmit();
+      form.requestSubmit();
     }
   });
-  for (const button of dialog.querySelectorAll('[data-graph-question]'))
-    button.onclick = () => askGraph(button.dataset.graphQuestion);
+  const send = el('button', graphChatSending ? 'Отвечаю…' : 'Отправить');
+  send.id = 'graphChatSend';
+  send.type = 'submit';
+  send.disabled = graphChatSending;
+  form.append(input, send);
+  form.onsubmit = event => { event.preventDefault(); askGraph(); };
+  side.replaceChildren(header, prompts, messages, form);
+  renderGraphChat();
 }
 
 // ── физика и отрисовка ──────────────────────────────────────────────────────
@@ -359,7 +402,7 @@ async function suggest(semantic) {
 
 async function renderSide() {
   const side = $('graphSide');
-  if (!selected) { side.replaceChildren(el('p', 'Выберите узел, чтобы увидеть подробности и связи. Двойной клик раскрывает его соседей.', 'muted')); return; }
+  if (!selected) return renderGraphChatPanel(side);
   const n = selected.node, m = n.meta, type = typeOf(n);
   side.replaceChildren();
   const tag = el('span', TYPES[type][0].replace(/и$|ы$/, ''), 'chip'); tag.style.background = TYPES[type][1]; tag.style.color = '#fff';

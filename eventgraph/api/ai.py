@@ -22,7 +22,7 @@ router = APIRouter(prefix="/ai", tags=["AI"], dependencies=[Depends(require_auth
 
 
 class SummaryRequest(BaseModel):
-    min_importance: int = Field(ge=1, le=4)
+    min_importance: int = Field(ge=1, le=5)
     direction: Literal["", "risk", "opportunity"] = ""
 
 
@@ -47,7 +47,7 @@ async def _profile(session: AsyncSession, profile_id: str) -> CompanyProfile:
     return profile
 
 
-def _feed_query(profile_id: str, min_importance: int, direction: str):
+def _feed_query(profile_id: str, min_importance: int, direction: str, limit: int = 30):
     own = Item.analysis["profiles"][profile_id]["importance"].astext
     query = (
         select(Item, Connector.name)
@@ -59,7 +59,7 @@ def _feed_query(profile_id: str, min_importance: int, direction: str):
         query = query.where(own_direction.in_(["risk", "mixed"]))
     elif direction == "opportunity":
         query = query.where(own_direction.in_(["opportunity", "mixed"]))
-    return query.order_by(Item.collected_at.desc()).limit(30)
+    return query.order_by(Item.collected_at.desc(), Item.uid.desc()).limit(limit)
 
 
 def _chat_title(item: Item, profile_id: str) -> str:
@@ -76,7 +76,7 @@ def _chat_title(item: Item, profile_id: str) -> str:
 @router.get("/summaries/{profile_id}")
 async def get_summary(
     profile_id: str,
-    min_importance: int = Query(default=3, ge=1, le=4),
+    min_importance: int = Query(default=3, ge=1, le=5),
     direction: Literal["", "risk", "opportunity"] = "",
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any] | None:
@@ -117,7 +117,7 @@ async def create_summary(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     profile = await _profile(session, profile_id)
-    rows = (await session.execute(_feed_query(profile_id, body.min_importance, body.direction))).all()
+    rows = (await session.execute(_feed_query(profile_id, body.min_importance, body.direction, limit=15))).all()
     if not rows:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Нет новостей под выбранные фильтры")
 

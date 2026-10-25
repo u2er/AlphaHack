@@ -147,9 +147,9 @@ async function loadFeed(force = false) {
 }
 
 function dots(n) {
-  const level = Math.min(4, Math.max(1, Number(n) || 1));
+  const level = Math.min(5, Math.max(1, Number(n) || 1));
   const box = el('span', String(level), `importance-badge importance-${level}`);
-  box.title = `Важность ${level} из 4`;
+  box.title = `Важность ${level} из 5`;
   return box;
 }
 const titleOf = item => item.analysis.headline || item.title || item.event || 'Событие';
@@ -226,8 +226,8 @@ function renderDetail(item) {
   for (const area of a.areas || []) meta.append(el('span', area, 'chip'));
   d.append(el('div', [dateOf(item), outlet(item)].filter(Boolean).join(' · '), 'muted'), el('h2', titleOf(item)), meta);
 
-  const importance = Math.min(4, Number(a.importance) || 0);
-  const meter = el('div', '', 'meter'); meter.append(el('b', `${importance}/4`));
+  const importance = Math.min(5, Number(a.importance) || 0);
+  const meter = el('div', '', 'meter'); meter.append(el('b', `${importance}/5`));
   meter.append(el('span', `Важность для ${current?.name || 'компании'}${a.confidence != null ? ` · уверенность оценки ${Math.round(a.confidence * 100)}%` : ''}`));
   d.append(meter);
 
@@ -261,10 +261,9 @@ function renderDetail(item) {
   if (item.event) src.push(el('p', `Событие в графе: ${item.event}`, 'muted'));
   d.append(block('Первоисточник', ['Источник', 'who-src'], ...src));
   const actions = el('div', '', 'ai-actions');
-  const discuss = el('button', 'Обсудить с ИИ', 'button-violet');
+  const discuss = el('button', 'Обсудить с ИИ', 'button-red');
   discuss.onclick = () => openChat(item);
   actions.append(discuss); d.append(actions);
-  d.append(el('div', `Запись ${item.uid}${a.run_id ? ` · ран аналитики #${a.run_id}` : ''} — ход рассуждений в EventGraph: GET /agent-runs/${a.run_id || '…'}`, 'trace'));
 }
 
 function summaryFilters() {
@@ -325,7 +324,7 @@ async function createSummary() {
 function renderChat(item) {
   const detail = $('detail'); detail.replaceChildren();
   const header = el('div', '', 'chat-news-header');
-  header.append(el('span', 'Обсуждение новости', 'eyebrow'), el('h2', titleOf(item)));
+  header.append(el('h2', titleOf(item)));
   const restore = el('button', 'Вернуться к новости', 'secondary');
   restore.onclick = () => { resetChatView(); renderDetail(item); };
   header.append(restore); detail.append(header);
@@ -452,12 +451,24 @@ function renderProfileAIEditor() {
   box.replaceChildren(el('h2', 'Изменить профиль с помощью ИИ'));
   if (!current) { box.append(el('p', 'Сначала выберите или создайте профиль компании.', 'muted')); return; }
   if (profileEditProposal) {
-    box.append(el('p', 'Проверьте черновик. Изменения будут сохранены только после подтверждения.', 'muted'));
-    const before = el('section', '', 'profile-edit-preview');
-    before.append(el('h3', 'Текущий профиль'), el('pre', profileEditProposal.original.pages.map(p => `${p.title}\n${p.content}`).join('\n\n')));
-    const after = el('section', '', 'profile-edit-preview');
-    after.append(el('h3', 'Предложенный профиль'), el('pre', profileEditProposal.profile.pages.map(p => `${p.title}\n${p.content}`).join('\n\n')));
-    box.append(before, after);
+    const changes = profileChanges(profileEditProposal.original, profileEditProposal.profile);
+    box.append(el('p', changes.length
+      ? 'Проверьте точечные изменения. Ничего не будет сохранено без подтверждения.'
+      : 'Агент не предложил изменений.', 'muted'));
+    const diff = el('section', '', 'profile-edit-diff');
+    if (changes.length) {
+      for (const change of changes) {
+        const section = el('section', '', 'profile-diff-page');
+        section.append(el('h3', change.title));
+        for (const line of change.lines) {
+          const row = el('div', `${line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '} ${line.text}`,
+            `profile-diff-line ${line.kind}`);
+          section.append(row);
+        }
+        diff.append(section);
+      }
+    } else diff.append(el('p', 'Текущий профиль останется без изменений.', 'muted'));
+    box.append(diff);
     const actions = el('div', '', 'dialog-actions');
     const cancel = el('button', 'Отменить', 'secondary'); cancel.onclick = () => { profileEditProposal = null; renderProfileAIEditor(); };
     const save = el('button', profileEditBusy ? 'Сохраняю…' : 'Подтвердить и сохранить');
@@ -487,6 +498,78 @@ function renderProfileAIEditor() {
     finally { profileEditBusy = false; renderProfileAIEditor(); }
   };
   box.append(form);
+}
+
+function profileChanges(original, proposed) {
+  const before = new Map(original.pages.map(page => [page.id, page]));
+  const changes = [];
+  for (const [key, title] of [['name', 'Название компании'], ['user_role', 'Роль пользователя']]) {
+    if (original[key] !== proposed[key]) changes.push({
+      id: key,
+      title,
+      lines: [
+        { kind: 'remove', text: original[key] || '—' },
+        { kind: 'add', text: proposed[key] || '—' },
+      ],
+    });
+  }
+  changes.push(...proposed.pages.flatMap(page => {
+    const previous = before.get(page.id);
+    if (!previous || previous.content === page.content) return [];
+    const oldLines = previous.content.split('\n'), newLines = page.content.split('\n');
+    const changes = lineDiff(oldLines, newLines);
+    const changedAt = changes.flatMap((line, index) => line.kind === 'same' ? [] : [index]);
+    const ranges = [];
+    for (const index of changedAt) {
+      const start = Math.max(0, index - 2), end = Math.min(changes.length, index + 3);
+      const last = ranges[ranges.length - 1];
+      if (last && start <= last[1]) last[1] = end;
+      else ranges.push([start, end]);
+    }
+    const lines = [];
+    ranges.forEach(([start, end], rangeIndex) => {
+      if (rangeIndex) lines.push({ kind: 'gap', text: '…' });
+      lines.push(...changes.slice(start, end));
+    });
+    return [{ id: page.id, title: page.title, lines }];
+  }));
+  return changes;
+}
+
+function lineDiff(before, after) {
+  if (before.length * after.length > 200000) {
+    let start = 0, endBefore = before.length, endAfter = after.length;
+    while (start < endBefore && start < endAfter && before[start] === after[start]) start++;
+    while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+      endBefore--; endAfter--;
+    }
+    return [
+      ...before.slice(Math.max(0, start - 2), start).map(text => ({ kind: 'same', text })),
+      ...before.slice(start, endBefore).map(text => ({ kind: 'remove', text })),
+      ...after.slice(start, endAfter).map(text => ({ kind: 'add', text })),
+      ...before.slice(endBefore, Math.min(before.length, endBefore + 2)).map(text => ({ kind: 'same', text })),
+    ];
+  }
+  const rows = Array.from({ length: before.length + 1 }, () => new Uint32Array(after.length + 1));
+  for (let i = before.length - 1; i >= 0; i--) {
+    for (let j = after.length - 1; j >= 0; j--) {
+      rows[i][j] = before[i] === after[j]
+        ? rows[i + 1][j + 1] + 1
+        : Math.max(rows[i + 1][j], rows[i][j + 1]);
+    }
+  }
+  const result = [];
+  let i = 0, j = 0;
+  while (i < before.length && j < after.length) {
+    if (before[i] === after[j]) {
+      result.push({ kind: 'same', text: before[i++] }); j++;
+    } else if (rows[i + 1][j] >= rows[i][j + 1]) {
+      result.push({ kind: 'remove', text: before[i++] });
+    } else result.push({ kind: 'add', text: after[j++] });
+  }
+  while (i < before.length) result.push({ kind: 'remove', text: before[i++] });
+  while (j < after.length) result.push({ kind: 'add', text: after[j++] });
+  return result;
 }
 
 // ── главная ─────────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ function inline(parent, text) {
 function markdown(text) {
   const root = el('div', '', 'md');
   let list = null, tableRows = null, para = [];
+  let nextOrderedNumber = 1, continueOrderedList = false;
   const flushTable = () => {
     if (!tableRows?.length) return;
     const isDivider = row => row.length && row.every(cell => /^:?-{3,}:?$/.test(cell));
@@ -63,6 +64,7 @@ function markdown(text) {
     if (!line.trim()) { flush(); continue; }
     if (line.trim().startsWith('|') && line.includes('|')) {
       if (para.length || list) flush();
+      continueOrderedList = false;
       (tableRows ||= []).push(cells(line));
       continue;
     }
@@ -70,13 +72,26 @@ function markdown(text) {
     const heading = line.match(/^#{1,6}\s+(.*)/);
     const bullet = line.match(/^\s*[-*•]\s+(.*)/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)/);
-    if (heading) { flush(); root.append(el('h4', heading[1])); }
+    if (heading) { flush(); continueOrderedList = false; root.append(el('h4', heading[1])); }
     else if (bullet || numbered) {
       if (para.length) { const p = el('p'); inline(p, para.join(' ')); root.append(p); para = []; }
       const tag = bullet ? 'ul' : 'ol';
-      if (!list || list.tagName.toLowerCase() !== tag) { list = el(tag); root.append(list); }
+      if (!list || list.tagName.toLowerCase() !== tag) {
+        list = el(tag);
+        if (numbered) {
+          const writtenNumber = Number(numbered[1]);
+          const startNumber = continueOrderedList && writtenNumber === 1 ? nextOrderedNumber : writtenNumber;
+          if (startNumber !== 1) list.start = startNumber;
+          nextOrderedNumber = startNumber + 1;
+          continueOrderedList = true;
+        }
+        root.append(list);
+      } else if (numbered) {
+        nextOrderedNumber++;
+        continueOrderedList = true;
+      }
       const li = el('li'); inline(li, (bullet || numbered)[1]); list.append(li);
-    } else { list = null; para.push(line.trim()); }
+    } else { list = null; continueOrderedList = false; para.push(line.trim()); }
   }
   flush();
   return root;
