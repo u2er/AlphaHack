@@ -3,20 +3,26 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import time
 from urllib.parse import parse_qs, unquote, urlsplit
+from . import auth, llm_settings
 from .controller import Controller
 from .insights import Insights, InsightsError
 
 STATIC = Path(__file__).resolve().parent
 MIME = {'index.html':'text/html; charset=utf-8','bank.js':'text/javascript; charset=utf-8',
         'onboarding.js':'text/javascript; charset=utf-8','graph.js':'text/javascript; charset=utf-8',
-        'style.css':'text/css; charset=utf-8'}
+        'style.css':'text/css; charset=utf-8','auth.js':'text/javascript; charset=utf-8',
+        'settings.js':'text/javascript; charset=utf-8','login.html':'text/html; charset=utf-8',
+        'login.js':'text/javascript; charset=utf-8'}
+# Without a session only the login page and what it needs.
+PUBLIC = {'/login','/login.js','/style.css'}
 MAX_UPLOAD = 30*1024*1024
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AlfaProfileGUI/1'
 
-    def _headers(self, status, content_type, length, *, attachment=None):
+    def _headers(self, status, content_type, length, *, attachment=None, extra=()):
         self.send_response(status)
         self.send_header('Content-Type',content_type)
         self.send_header('Content-Length',str(length))
@@ -26,12 +32,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'")
         if attachment:
             self.send_header('Content-Disposition',f'attachment; filename="{attachment}"')
+        for name, value in extra:
+            self.send_header(name,value)
         self.end_headers()
 
-    def json(self, status, value, *, attachment=None):
+    def json(self, status, value, *, attachment=None, extra=()):
         data = json.dumps(value,ensure_ascii=False,default=str).encode('utf-8')
-        self._headers(status,'application/json; charset=utf-8',len(data),attachment=attachment)
+        self._headers(status,'application/json; charset=utf-8',len(data),attachment=attachment,extra=extra)
         self.wfile.write(data)
+
+    # ── вход по ключу ───────────────────────────────────────────────────────
+    def _signed_in(self):
+        key = self.server.access_key
+        return not key or auth.cookie_valid(key,self.headers.get('Cookie',''))
+
+    def _guard(self, path):
+        """False — the request is answered here: the login page or 401."""
+        if path in PUBLIC or self._signed_in():
+            return True
+        if path.startswith('/api/'):
+            self.error_json(401,'Нужен вход по ключу доступа')
+        else:
+            self._headers(302,'text/plain; charset=utf-8',0,extra=[('Location','/login')])
+        return False
+
+    def _cookie(self, value, max_age):
+        secure = '; Secure' if self.headers.get('X-Forwarded-Proto','') == 'https' else ''
+        return ('Set-Cookie',f'{auth.COOKIE}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure}')
+
+    def _login(self):
+        body = self._body()
+        key = self.server.access_key
+        if key and not auth.key_matches(key,str(body.get('key') or '')):
+            time.sleep(1)  # 40 random characters are not guessed anyway; this keeps logs quiet
+            return self.error_json(401,'Неверный ключ доступа')
+        token = auth.session_token(key) if key else ''
+        self.json(200,{'ok':True},extra=[self._cookie(token,30*24*3600)])
 
     def error_json(self, status, message):
         self.json(status,{'error':message})
@@ -57,6 +93,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path)
         try:
+            if path.path == '/login' and self.server.access_key and self._signed_in():
+                return self._headers(302,'text/plain; charset=utf-8',0,extra=[('Location','/')])
+            if not self._guard(path.path):
+                return
+            if path.path == '/api/settings/llm':
+                return self.json(200,llm_settings.view())
             if path.path == '/api/companies':
                 query = parse_qs(path.query).get('q',[''])[0][:100]
                 return self.json(200,{'companies':self.server.controller.companies(query)})
@@ -65,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._insights(parts[2:],parse_qs(path.query))
             if len(parts) == 3 and parts[:2] == ['api','onboarding']:
                 return self.json(200,self.server.controller.get(parts[2]).view())
-            name = 'index.html' if path.path == '/' else path.path.lstrip('/')
+            name = {'/':'index.html','/login':'login.html'}.get(path.path) or path.path.lstrip('/')
             if name in MIME:
                 data = (STATIC/name).read_bytes()
                 self._headers(200,MIME[name],len(data))
@@ -157,7 +199,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            parts = urlsplit(self.path).path.strip('/').split('/')
+            path = urlsplit(self.path).path
+            if path == '/api/login':
+                return self._login()
+            if not self._guard(path):
+                return
+            if path == '/api/logout':
+                self._check_origin()
+                return self.json(200,{'ok':True},extra=[self._cookie('',0)])
+            if path == '/api/settings/llm':
+                return self.json(200,llm_settings.save(self._body()))
+            if path == '/api/settings/llm/reset':
+                self._body()
+                return self.json(200,llm_settings.reset())
+            parts = path.strip('/').split('/')
             controller = self.server.controller
             if parts[:2] == ['api','insights']:
                 return self._insights_post(parts[2:],self._body())
@@ -196,8 +251,10 @@ class Handler(BaseHTTPRequestHandler):
             self.error_json(500,'Внутренняя ошибка; проверьте терминал')
             raise
 
-def create_server(host='127.0.0.1',port=8765,controller=None,insights=None):
+def create_server(host='127.0.0.1',port=8765,controller=None,insights=None,access_key=''):
+    """An empty access_key leaves the UI open (tests); main() always sets one."""
     server = ThreadingHTTPServer((host,port),Handler)
+    server.access_key = access_key
     server.controller = controller or Controller()
     server.insights = insights or Insights(store=getattr(server.controller,'store',None))
     return server
@@ -206,12 +263,12 @@ def main():
     import argparse
     parser=argparse.ArgumentParser(description='Интерфейс «Альфа-Бизнес»: бизнес-аналитика и чат добавления компании')
     parser.add_argument('--port',type=int,default=8765)
-    # 0.0.0.0 only inside a container, where compose publishes the port on 127.0.0.1.
+    # 0.0.0.0 inside a container; the port is public, so every page is behind the access key.
     parser.add_argument('--host',default='127.0.0.1')
     args=parser.parse_args()
     from utils.logging_utils import setup_logging
     setup_logging()  # library loading and onboarding errors reach `docker compose logs`
-    server=create_server(host=args.host,port=args.port)
+    server=create_server(host=args.host,port=args.port,access_key=auth.resolve_key())
     server.controller.prepare_library()
     print(f'Откройте http://127.0.0.1:{args.port}/',flush=True)
     try:

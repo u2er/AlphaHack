@@ -56,6 +56,7 @@ async def _db_ok() -> bool:
 @app.get("/health", tags=["health"])
 async def health() -> dict[str, Any]:
     db = await _db_ok()
+    settings.refresh_llm()
     return {
         "status": "ok" if db else "degraded",
         "db": db,

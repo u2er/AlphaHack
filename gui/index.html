@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Альфа-Бизнес · Бизнес-аналитика</title>
   <link rel="stylesheet" href="/style.css">
+  <script defer src="/auth.js"></script>
   <script defer src="/onboarding.js"></script>
   <script defer src="/graph.js"></script>
   <script defer src="/bank.js"></script>
+  <script defer src="/settings.js"></script>
 </head>
 <body>
 <div class="shell">
@@ -30,6 +32,7 @@
         <select id="clientSelect" aria-label="Компания"><option value="">Загрузка…</option></select>
       </label>
       <div class="topbar-right">
+        <button type="button" class="icon-button gear" id="settingsOpen" aria-label="Настройки" title="Настройки"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
         <span class="avatar" title="Пользователь">ФД</span>
       </div>
     </header>
@@ -191,6 +194,39 @@
     </section>
   </div>
 </div>
+<dialog class="dialog settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
+  <form id="settingsForm" novalidate>
+    <div class="dialog-head"><h2 id="settingsTitle">Настройки</h2><button type="button" class="icon-button" id="settingsClose" aria-label="Закрыть">✕</button></div>
+    <p class="muted settings-note">Модель для агентов, чатов и мастера профиля. Пустое поле — значение из <code>.env</code>; изменения подхватываются без перезапуска.</p>
+    <label class="field"><span>Провайдер</span>
+      <select id="llmProvider">
+        <option value="deepseek">DeepSeek</option>
+        <option value="openai">OpenAI</option>
+        <option value="openrouter">OpenRouter</option>
+        <option value="custom">Другой (OpenAI‑совместимый API)</option>
+      </select>
+    </label>
+    <label class="field"><span>Адрес API</span><input name="base_url" id="llmBaseUrl" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1"><small data-env="base_url"></small></label>
+    <label class="field"><span>Модель</span><input name="model" id="llmModel" autocomplete="off" spellcheck="false"><small data-env="model"></small></label>
+    <label class="field"><span>Ключ API</span><input type="password" id="llmApiKey" autocomplete="new-password" spellcheck="false"><small id="llmKeyState"></small></label>
+    <label class="check settings-check"><input type="checkbox" id="llmKeyReset"> Вернуть ключ из <code>.env</code></label>
+    <details class="settings-more">
+      <summary>Дополнительно</summary>
+      <label class="field"><span>Модель видит картинки</span>
+        <select name="vision"><option value="">Как в .env</option><option value="true">Да</option><option value="false">Нет</option></select><small data-env="vision"></small></label>
+      <label class="field"><span>Доп. параметры запроса <i>JSON</i></span><input name="params" autocomplete="off" spellcheck="false" placeholder='{"reasoning_effort": "none"}'><small data-env="params"></small></label>
+      <label class="field"><span>Потолок токенов ответа <i>профиль компании</i></span><input name="max_tokens" inputmode="numeric" autocomplete="off"><small data-env="max_tokens"></small></label>
+      <label class="field"><span>Таймаут вызова, с</span><input name="timeout" inputmode="numeric" autocomplete="off"><small data-env="timeout"></small></label>
+    </details>
+    <p class="form-error" id="settingsError" hidden></p>
+    <div class="dialog-actions settings-actions">
+      <button type="button" class="secondary" id="settingsLogout">Выйти</button>
+      <span class="spacer"></span>
+      <button type="button" class="secondary" id="settingsReset">Сбросить к .env</button>
+      <button type="submit" id="settingsSave">Сохранить</button>
+    </div>
+  </form>
+</dialog>
 <dialog class="dialog chat-history-dialog" id="chatHistoryDialog" aria-labelledby="chatHistoryTitle">
   <div class="dialog-head"><h2 id="chatHistoryTitle">История обсуждений</h2><button type="button" class="icon-button" id="chatHistoryClose" aria-label="Закрыть">✕</button></div>
   <div id="chatHistoryList"></div>

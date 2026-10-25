@@ -114,12 +114,17 @@ def image_messages(images: list[_images.ToolImage], notes: list[str], vision: bo
 # ── модель ───────────────────────────────────────────────────────────────────
 
 
-@lru_cache(maxsize=1)
 def _client() -> Any:
+    # Настройки LLM меняются из интерфейса без перезапуска — клиент вслед за ними.
+    settings.refresh_llm()
+    return _make_client(settings.llm_base_url, settings.llm_api_key, settings.llm_timeout)
+
+
+@lru_cache(maxsize=1)
+def _make_client(base_url: str, api_key: str, timeout: int) -> Any:
     from openai import AsyncOpenAI
 
-    return AsyncOpenAI(base_url=settings.llm_base_url or None, api_key=settings.llm_api_key or "none",
-                       timeout=settings.llm_timeout, max_retries=0)
+    return AsyncOpenAI(base_url=base_url or None, api_key=api_key or "none", timeout=timeout, max_retries=0)
 
 
 def _should_retry(exc: Exception) -> bool:
@@ -306,6 +311,7 @@ async def _loop(run_id: int, spec: AgentSpec, task: str, prior: list[dict[str, A
     ctx = ToolContext(spec=spec, graph=settings.graph_name, attachments=attachments,
                       profile_id=(variables or {}).get("profile_id") or None)
     tools: dict[str, Tool] = {tool.name: tool for tool in build_tools(ctx)}
+    settings.refresh_llm()
     schemas = [tool.schema() for tool in tools.values()] or None
     params = {"temperature": spec.temperature, **settings.llm_extra}
     guard = RepeatGuard(spec.max_repeated_calls)

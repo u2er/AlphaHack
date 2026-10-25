@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AGENTS = ("news", "gardener", "analyst")
@@ -138,6 +138,10 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Значения LLM_* из .env — основа, поверх которой ложатся настройки из интерфейса.
+    _llm_env: dict[str, Any] | None = PrivateAttr(default=None)
+    _llm_applied: dict[str, str] = PrivateAttr(default_factory=dict)
+
     @field_validator("llm_params")
     @classmethod
     def _params_json(cls, value: str) -> str:
@@ -162,9 +166,40 @@ class Settings(BaseSettings):
     def llm_extra(self) -> dict[str, Any]:
         return json.loads(self.llm_params) if self.llm_params.strip() else {}
 
+    def refresh_llm(self) -> bool:
+        """Подхватить настройки LLM из интерфейса (utils/llm_overrides.py) поверх
+        .env. Пока файл не менялся, поля не трогаются. True — что-то поменялось."""
+        from utils import llm_overrides
+
+        found = llm_overrides.load()
+        if found == self._llm_applied:
+            return False
+        if self._llm_env is None:
+            self._llm_env = {"base_url": self.llm_base_url, "model": self.llm_model, "api_key": self.llm_api_key,
+                             "vision": self.llm_vision, "params": self.llm_params, "timeout": self.llm_timeout}
+        base = self._llm_env
+        values = {**base, **{k: v for k, v in found.items() if k in base}}
+        if "vision" in found:
+            values["vision"] = found["vision"].strip().lower() in {"1", "true", "yes", "on"}
+        if "timeout" in found:
+            try:
+                values["timeout"] = int(float(found["timeout"]))
+            except ValueError:
+                values["timeout"] = base["timeout"]
+        if "params" in found:
+            try:
+                values["params"] = found["params"] if isinstance(json.loads(found["params"]), dict) else base["params"]
+            except ValueError:
+                values["params"] = base["params"]
+        for key, value in values.items():
+            setattr(self, f"llm_{key}", value)
+        self._llm_applied = found
+        return True
+
     @property
     def enabled_agents(self) -> set[str]:
         """Агенты, которых можно запускать: названы в AGENTS и есть ключ LLM."""
+        self.refresh_llm()
         if not self.llm_api_key:
             return set()
         return {a.strip() for a in self.agents.split(",") if a.strip() in AGENTS}

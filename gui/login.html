@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Альфа-Бизнес · Вход</title>
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/login.js"></script>
+</head>
+<body class="login-page">
+<main class="login">
+  <div class="logo"><span class="mark">А</span><span>Альфа‑Бизнес</span></div>
+  <form class="panel login-card" id="loginForm" novalidate>
+    <h1>Вход</h1>
+    <p class="muted">Интерфейс открыт только по ключу доступа — 40 символов из настроек сервера.</p>
+    <label class="field"><span>Ключ доступа</span>
+      <input type="password" id="loginKey" name="key" required autocomplete="current-password" spellcheck="false" maxlength="200" autofocus>
+    </label>
+    <p class="form-error" id="loginError" hidden></p>
+    <button type="submit" id="loginSubmit">Войти</button>
+  </form>
+</main>
+</body>
+</html>
