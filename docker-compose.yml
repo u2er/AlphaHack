@@ -1,8 +1,6 @@
 services:
   api:
     build: .
-    # `docker compose up` всегда пересобирает образ (кеш слоёв — секунды):
-    # без этого на сервере остаётся старый образ от прошлого развёртывания.
     pull_policy: build
     container_name: eventgraph
     restart: unless-stopped
@@ -17,8 +15,6 @@ services:
       HF_HOME: /data/hf
       # Экспорты мастера профиля: GUI кладёт сюда, воркер загружает.
       PROFILES_DIR: /profiles
-      # Ключ LLM можно не держать в .env: `LLM_API_KEY=… docker compose up`.
-      # Подстановка берёт его из окружения, иначе из .env.
       LLM_API_KEY: ${LLM_API_KEY:-}
       # Интернет-поиск агентов (web_search): SEARXNG_URL= в .env — выключить.
       SEARXNG_URL: ${SEARXNG_URL-http://searxng:8080}
@@ -43,8 +39,6 @@ services:
       - .env
     environment: *env
     volumes:
-      # Картинки записей, кеш локального эмбеддера (data/models),
-      # модели docling (data/hf) и кэш PDF-парсера (data/pdf_cache).
       - data:/data
       - ./pdfs:/data/pdfs
       - profiles:/profiles
@@ -53,7 +47,6 @@ services:
         condition: service_healthy
 
   profile-gui:
-    # Мастер профиля компании: выбор компании, ответы, темы, экспорт в /profiles.
     build: .
     pull_policy: build
     container_name: eventgraph-profile-gui
@@ -65,11 +58,9 @@ services:
     environment:
       <<: *env
       GUI_RUNS_DIR: /data/gui-runs
-      # Лента бизнес-аналитики: GUI ходит в API с API_KEY из .env, браузер ключа не видит.
       EVENTGRAPH_URL: http://api:8000
     ports:
-      # Без входа по паролю — только на локальном интерфейсе.
-      - "127.0.0.1:${PROFILE_GUI_PORT:-8765}:8765"
+      - "${PROFILE_GUI_PORT:-8765}:8765"
     volumes:
       - data:/data
       - profiles:/profiles
@@ -80,10 +71,6 @@ services:
         condition: service_started
 
   profile-prepare:
-    # Разовая подготовка библиотеки профиля: CSV приложения 1 и OCR + векторы
-    # PDF приложения 2 в схему profile_data той же базы.
-    #   docker compose run --rm profile-prepare            (первый раз)
-    #   docker compose run --rm profile-prepare --replace  (пересборка)
     build: .
     pull_policy: build
     profiles: ["setup"]
@@ -99,8 +86,6 @@ services:
         condition: service_healthy
 
   searxng:
-    # Метапоисковик для web_search агентов (search_tool/): JSON-выдача, без
-    # лимитера. Наружу не открыт; с хоста — 127.0.0.1:8082 (python -m search_tool).
     image: docker.io/searxng/searxng:2026.10.19-81371861f
     container_name: eventgraph-searxng
     restart: unless-stopped
@@ -108,14 +93,12 @@ services:
       # Ключ подписи куки и прокси картинок; задайте свой случайный в .env.
       SEARXNG_SECRET: ${SEARXNG_SECRET:-eventgraph-searxng-change-me}
     ports:
-      - "127.0.0.1:${SEARXNG_PORT:-8082}:8080"
+      - "${SEARXNG_PORT:-8082}:8080"
     volumes:
       - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
       - searxng-cache:/var/cache/searxng
 
   db:
-    # Postgres с pgvector: записи, раны агентов, граф с векторами и библиотека
-    # профиля (схема profile_data) — в одной базе.
     image: pgvector/pgvector:pg16
     container_name: eventgraph-db
     restart: unless-stopped
@@ -124,8 +107,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-eventgraph}
       POSTGRES_DB: eventgraph
     ports:
-      # Для CLI профиля и тестов с хоста; только локальный интерфейс.
-      - "127.0.0.1:${DB_PORT:-5433}:5432"
+      - "${DB_PORT:-5433}:5432"
     volumes:
       - pg:/var/lib/postgresql/data
     healthcheck:
