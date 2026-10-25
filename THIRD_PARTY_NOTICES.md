@@ -98,9 +98,10 @@
 | pypdfium2 (с PDFium) | 4.30.0 | Apache-2.0 / BSD-3-Clause |
 | pytest | 8.3.4 | MIT |
 | pytest-asyncio | 0.25.0 | Apache-2.0 |
-| torch, torchvision (CPU-сборка, ставятся в Dockerfile) | последние на момент сборки | BSD-3-Clause |
+| torch, torchvision (CPU-сборка, ставятся в Dockerfile) | 2.14.1+cpu, 0.29.1+cpu в `poetry.lock` | BSD-3-Clause |
 
-Транзитивные зависимости (в том числе pandas, tabulate, onnxruntime,
+Версии пакетов, заданных диапазоном, и всех транзитивных зависимостей
+зафиксированы в `poetry.lock`. Транзитивные зависимости (в том числе pandas, tabulate, onnxruntime,
 huggingface-hub) приходят с пакетами выше под их собственными лицензиями.
 
 ## 7. Образы и системные компоненты

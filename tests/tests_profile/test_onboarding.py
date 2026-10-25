@@ -145,6 +145,38 @@ class OnboardingTests(unittest.TestCase):
             session.answer(['Россия','СНГ'])
             self.assertEqual(session.answers[0]['answer'], 'Россия, СНГ')
 
+    def test_sensitive_data_is_hidden_before_the_agent_and_the_user_chooses(self):
+        def leaky(path):
+            return {'kind':'Текст','pages':[
+                {'page':1,'text':'Выручка 80 млрд. Директор: паспорт 45 08 123456, тел. +7 912 345-67-89. Пароль: hunter22'},
+                {'page':2,'text':'Коммерческая тайна. Маржа по контракту с Магнитом 31%'}]}
+        secrets = ['45 08 123456', '345-67-89', 'hunter22', 'Магнитом']
+        for choice, visible, gone in [('Скрыть найденное (рекомендуется)', [], secrets),
+                                      ('Оставить как есть', ['45 08 123456', 'Магнитом'], ['hunter22'])]:
+            with self.subTest(choice=choice), tempfile.TemporaryDirectory() as tmp:
+                finish = act('finish', draft=draft())
+                for page in finish['draft']['pages']: page['sources'] = ['form.activity', 'file:f1:1']
+                llm = LLM([finish])
+                session = Onboarding(Store(), lambda: llm, Path(tmp), parse=leaky)
+                session.add_file('Договор.txt', b'text')
+                self.assertTrue(wait(lambda: session.files['f1'].status == 'ready'))
+                self.assertEqual(list(Path(tmp, 'files').iterdir()), [])   # исходник не хранится
+                session.submit_form(FORM | {'extra': 'Звонить +7 999 111-22-33'})
+                self.assertTrue(wait(lambda: (session.view()['question'] or {}).get('ref') == 'privacy'))
+                self.assertEqual(llm.calls, [])                            # агент ждёт выбора
+                with self.assertRaises(ValueError): session.answer('что-то своё')
+                session.answer(choice)
+                self.assertTrue(wait(lambda: session.status in ('review', 'error')))
+                self.assertEqual(session.answers, [])                      # выбор — не ответ о компании
+                seen = json.dumps(llm.calls, ensure_ascii=False) + session.document.model_dump_json()
+                for value in gone + ['111-22-33']:
+                    self.assertNotIn(value, seen)
+                for value in visible:
+                    self.assertIn(value, seen)
+                self.assertTrue(session.document.files[0].redactions)
+                kinds = [m['kind'] for m in session.view()['messages']]
+                self.assertIn('sensitive', kinds); self.assertIn('redaction', kinds)
+
     def test_unsupported_files_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             session, _ = self.make([], tmp)

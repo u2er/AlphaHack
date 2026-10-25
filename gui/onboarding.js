@@ -199,6 +199,12 @@ function bubble(message) {
     const q = message.question; if (q?.kind !== 'text') b.append(el('small', q.kind === 'multi' ? 'Можно выбрать несколько' : 'Выберите один вариант', 'muted'));
   } else if (message.kind === 'form_answer') { b.append(el('b', 'Анкета')); b.append(el('pre', message.text, 'plain')); }
   else if (message.kind === 'error') { b.classList.add('bubble-error'); b.textContent = message.text; }
+  else if (message.kind === 'sensitive' || message.kind === 'redaction') {
+    b.classList.add('bubble-privacy'); b.append(el('b', message.text));
+    // Превью уже маскированы на сервере: значений в браузер не приходит.
+    const pages = [...new Set((message.findings || []).map(f => `стр. ${f.page}: ${f.preview}`))].slice(0, 8);
+    if (pages.length) b.append(el('small', pages.join(' · '), 'muted'));
+  }
   else b.textContent = message.text;
   row.append(b); return row;
 }
@@ -268,10 +274,12 @@ async function sendFile(file) {
 }
 function renderFiles() {
   const list = $('fileList'); if (!list) return;
-  const status = { parsing: 'разбираю…', ready: 'готов', error: 'ошибка' };
+  const status = { parsing: 'разбираю…', ready: 'готов', error: 'ошибка', removed: 'убран' };
   list.replaceChildren(...session.files.map(f => {
     const row = el('div', '', `file-row file-${f.status}`);
     row.append(el('b', f.filename), el('small', `${f.kind} · ${Math.max(1, Math.round(f.size / 1024))} КБ · ${status[f.status]}${f.pages ? ` · ${f.pages} стр.` : ''}${f.error ? ` — ${f.error}` : ''}`));
+    const hidden = Object.values(f.redactions || {}).reduce((a, b) => a + b, 0);
+    if (hidden) row.append(el('small', `скрыто чувствительных данных: ${hidden}`, 'privacy-badge'));
     return row;
   }), ...pendingFiles.map(n => el('div', `${n}: загрузка…`, 'file-row file-parsing')));
 }
@@ -299,12 +307,14 @@ function questionCard(q) {
       const l = el('label', '', 'choice'); const i = el('input'); i.type = type; i.name = name; i.value = option;
       l.append(i, el('span', option)); card.append(l);
     }
-    // «Своё» есть всегда: и в одиночном, и в множественном выборе.
-    const l = el('label', '', 'choice choice-own'); own = el('input'); own.type = type; own.name = name;
-    ownText = el('input'); ownText.placeholder = 'напишите свой вариант'; ownText.id = 'qOther';
-    ownText.oninput = () => { own.checked = !!ownText.value.trim() || own.checked; };
-    ownText.onfocus = () => { if (type === 'radio') own.checked = true; };
-    l.append(own, el('span', 'Своё:'), ownText); card.append(l);
+    // «Своё» есть всегда: и в одиночном, и в множественном выборе — кроме выбора про найденные данные.
+    if (q.ref !== 'privacy') {
+      const l = el('label', '', 'choice choice-own'); own = el('input'); own.type = type; own.name = name;
+      ownText = el('input'); ownText.placeholder = 'напишите свой вариант'; ownText.id = 'qOther';
+      ownText.oninput = () => { own.checked = !!ownText.value.trim() || own.checked; };
+      ownText.onfocus = () => { if (type === 'radio') own.checked = true; };
+      l.append(own, el('span', 'Своё:'), ownText); card.append(l);
+    } else card.querySelector('input')?.setAttribute('checked', '');
   }
   const row = el('div', '', 'buttonrow'), send = el('button', 'Ответить'), dunno = el('button', 'Не знаю', 'secondary');
   const submit = async value => {
@@ -315,9 +325,9 @@ function questionCard(q) {
   send.onclick = () => {
     if (q.kind === 'text') return submit($('qAnswer').value);
     const chosen = [...card.querySelectorAll('input:checked')].filter(i => i !== own).map(i => i.value);
-    const text = ownText.value.trim();
-    if (own.checked && !text) { ownText.focus(); return notice('Напишите свой вариант или снимите отметку «Своё»', true); }
-    if (own.checked) chosen.push(text);
+    const text = ownText?.value.trim();
+    if (own?.checked && !text) { ownText.focus(); return notice('Напишите свой вариант или снимите отметку «Своё»', true); }
+    if (own?.checked) chosen.push(text);
     submit(q.kind === 'multi' ? chosen : chosen[chosen.length - 1] || '');
   };
   answerArea?.addEventListener('keydown', event => {
@@ -327,7 +337,7 @@ function questionCard(q) {
     }
   });
   dunno.onclick = () => submit(q.kind === 'multi' ? ['не знаю'] : 'не знаю');
-  row.append(send, dunno); card.append(row);
+  row.append(send); if (q.ref !== 'privacy') row.append(dunno); card.append(row);
   return card;
 }
 

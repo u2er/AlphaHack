@@ -143,6 +143,8 @@ class FileRef(StrictModel):
     kind: str = ''
     pages: int = 0
     sha256: str = ''
+    # Скрыто защитой при загрузке: вид данных → число (profile.sensitive).
+    redactions: dict[str, int] = Field(default_factory=dict)
 
 
 class ProfileDocument(StrictModel):
