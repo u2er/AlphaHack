@@ -51,8 +51,10 @@
   эмбеддера, новости источников, LLM.
 - Ключ к LLM организаторов (`LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` — см.
   «Модели LLM»).
-- Для разработки без Docker — Python 3.12, Tesseract (`rus`, `eng`), Postgres 16
-  с pgvector.
+- Для разработки без Docker — Python 3.12, Poetry 2.x, Tesseract (`rus`,
+  `eng`), Postgres 16 с pgvector.
+- Версии языка и всех зависимостей зафиксированы в `poetry.lock`; образ
+  ставит их оттуда (`poetry install --no-root`), так что сборка повторяется.
 
 ## Сценарий проверки
 
@@ -118,7 +120,7 @@ GLM-5.3-Flash, DeepSeek-V4.1-Flash или Kimi-K2.6). `LLM_VISION=true` — то
 
 - **Источники — в коде.** Встроенные источники — `eventgraph/sources.py`,
   сборщики — модули `eventgraph/connectors/kinds/`, их библиотеки — в
-  `requirements.txt`. Клиент может добавить свой сайт или Telegram-канал из
+  `pyproject.toml` (версии — в `poetry.lock`). Клиент может добавить свой сайт или Telegram-канал из
   интерфейса — это настройки существующих сборщиков, не код. В базе у
   коннектора — курсор, расписание и история запусков.
 - **Записи разбираются по одной, как только собраны.** Воркер берёт самую

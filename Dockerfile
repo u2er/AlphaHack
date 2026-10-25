@@ -13,10 +13,19 @@ RUN apt-get update \
         libtesseract-dev libleptonica-dev pkg-config g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-# CPU-сборка torch ставится до docling: иначе pip заберёт CUDA-версию (несколько гигабайт) с PyPI.
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir -r requirements.txt
+# Зависимости — строго по poetry.lock, в системный Python образа (без venv).
+# CPU-сборка torch зафиксирована там же (источник pytorch-cpu в pyproject.toml):
+# CUDA-версия с PyPI весит несколько гигабайт.
+ENV POETRY_VERSION=2.5.1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_CACHE_DIR=/tmp/poetry-cache
+COPY pyproject.toml poetry.lock ./
+# Сам Poetry — в отдельном venv, чтобы его зависимости не спорили с lock-файлом.
+RUN python -m venv /opt/poetry \
+    && /opt/poetry/bin/pip install --no-cache-dir "poetry==${POETRY_VERSION}" \
+    && /opt/poetry/bin/poetry install --no-root --with dev \
+    && rm -rf "${POETRY_CACHE_DIR}"
 
 COPY . .
 RUN chmod +x entrypoint.sh \

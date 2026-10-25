@@ -196,7 +196,8 @@ def test_parse_completion_reads_calls_reasoning_and_usage():
 
 def test_every_agent_has_its_prompt():
     for agent in SPECS.values():
-        assert len(agent.prompt) > 1000, agent.name
+        # Однократной сводке (один шаг, без инструментов) хватает короткого промпта.
+        assert len(agent.prompt) > (0 if agent.max_steps == 1 else 1000), agent.name
         # Инструменты в промптах — те, что есть у агентов.
         assert "casket" not in agent.prompt.lower()
 
